@@ -8,7 +8,7 @@ A local web dashboard for directing Claude Code agents on personal game projects
 
 - Windows 11 (macOS and Linux work too)
 - [Node.js 22.13+](https://nodejs.org/) (LTS 22 or 24)
-- [pnpm](https://pnpm.io/installation): `npm install -g pnpm` or `corepack enable`
+- [pnpm](https://pnpm.io/installation) 12: `npm install -g pnpm`, then `pnpm self-update` (or `corepack enable`)
 - [Claude Code](https://code.claude.com/docs) installed and logged in (`claude` works in a terminal)
 - git
 

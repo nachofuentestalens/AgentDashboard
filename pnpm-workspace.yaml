@@ -2,3 +2,7 @@ packages:
   - shared
   - server
   - web
+
+# esbuild (used by Vite and tsx) downloads its platform binary in a build step.
+allowBuilds:
+  esbuild: true

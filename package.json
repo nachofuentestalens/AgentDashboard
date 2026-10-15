@@ -5,7 +5,7 @@
   "engines": {
     "node": ">=22.13"
   },
-  "packageManager": "pnpm@10.28.0",
+  "packageManager": "pnpm@12.11.2",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:demo": "node scripts/dev.mjs --demo",
@@ -24,10 +24,5 @@
     "prettier": "^3.9.10",
     "typescript": "^5.9.3",
     "vitest": "^4.0.5"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
   }
 }
