@@ -42,7 +42,7 @@ test("create a project, chat with the agent, resume, stop and retry", async ({ p
   // The task shows up in the project's list with its cost.
   await page.getByRole("navigation").getByRole("link", { name: "Idle Quest" }).click();
   await expect(page.getByRole("heading", { name: "New chat" })).toBeVisible();
-  await expect(page.getByText("Design three starter classes [tool]", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Design three starter classes/ })).toBeVisible();
   await page.screenshot({ path: "test-results/tasks.png" });
 });
 
