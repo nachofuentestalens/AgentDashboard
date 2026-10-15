@@ -1,0 +1,93 @@
+import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import type { RunStatus, TaskStatus } from "@ad/shared";
+
+type Variant = "primary" | "secondary" | "ghost" | "danger";
+
+const variants: Record<Variant, string> = {
+  primary: "bg-accent-strong text-white hover:bg-accent disabled:bg-ink-700 disabled:text-ink-400",
+  secondary: "bg-ink-800 text-ink-100 border border-ink-700 hover:bg-ink-700 disabled:text-ink-400",
+  ghost: "text-ink-300 hover:text-ink-100 hover:bg-ink-800 disabled:text-ink-600",
+  danger: "bg-red-500/10 text-red-300 border border-red-500/30 hover:bg-red-500/20",
+};
+
+export function Button({ variant = "secondary", className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
+  return (
+    <button
+      type="button"
+      {...props}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed ${variants[variant]} ${className}`}
+    />
+  );
+}
+
+const statusStyle: Record<TaskStatus | RunStatus, { label: string; dot: string; text: string }> = {
+  idle: { label: "Idle", dot: "bg-ink-400", text: "text-ink-300" },
+  running: { label: "Running", dot: "bg-accent animate-pulse", text: "text-accent" },
+  succeeded: { label: "Done", dot: "bg-emerald-400", text: "text-emerald-300" },
+  failed: { label: "Failed", dot: "bg-red-400", text: "text-red-300" },
+  stopped: { label: "Stopped", dot: "bg-ink-400", text: "text-ink-300" },
+  interrupted: { label: "Interrupted", dot: "bg-amber-400", text: "text-amber-300" },
+};
+
+export function StatusBadge({ status }: { status: TaskStatus | RunStatus }) {
+  const s = statusStyle[status];
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${s.text}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+      {s.label}
+    </span>
+  );
+}
+
+export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium tracking-wide text-ink-300 uppercase">{label}</span>
+      {children}
+      {hint && <span className="mt-1 block text-xs text-ink-400">{hint}</span>}
+    </label>
+  );
+}
+
+export const inputClass =
+  "w-full rounded-md border border-ink-700 bg-ink-900 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-400 focus:border-accent focus:outline-none";
+
+export function Dialog({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    if (open && !d.open) d.showModal();
+    if (!open && d.open) d.close();
+  }, [open]);
+  return (
+    <dialog
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => e.target === ref.current && onClose()}
+      className="m-auto w-[min(560px,calc(100vw-32px))] rounded-xl border border-ink-700 bg-ink-850 p-0 text-ink-100 shadow-2xl backdrop:bg-black/60"
+    >
+      <div className="p-5">
+        <h2 className="mb-4 text-lg font-semibold">{title}</h2>
+        {children}
+      </div>
+    </dialog>
+  );
+}
+
+export function ErrorNote({ error }: { error: unknown }) {
+  if (!error) return null;
+  return <p className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{(error as Error).message ?? String(error)}</p>;
+}
+
+export function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string }) {
+  return (
+    <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-ink-200 select-none" title={hint}>
+      <span className={`relative h-5 w-9 rounded-full transition-colors ${checked ? "bg-accent-strong" : "bg-ink-700"}`}>
+        <input type="checkbox" className="peer sr-only" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+        <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${checked ? "translate-x-4" : ""}`} />
+      </span>
+      {label}
+    </label>
+  );
+}

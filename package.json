@@ -1,0 +1,33 @@
+{
+  "name": "agent-dashboard",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:demo": "node scripts/dev.mjs --demo",
+    "build": "pnpm --filter @ad/web build",
+    "start": "pnpm build && pnpm --filter @ad/server start",
+    "typecheck": "tsc -p shared && tsc -p server && tsc -p web",
+    "test": "vitest run",
+    "test:e2e": "pnpm build && playwright test",
+    "validate": "pnpm typecheck && pnpm test && pnpm test:e2e",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "^22.15.0",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
