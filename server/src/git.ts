@@ -2,12 +2,26 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-function git(cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+export function git(cwd: string, args: string[], stdin?: string): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    execFile("git", args, { cwd, timeout: 30_000, windowsHide: true }, (error, stdout, stderr) => {
+    const child = execFile("git", args, { cwd, timeout: 30_000, windowsHide: true }, (error, stdout, stderr) => {
       resolve({ ok: !error, stdout: stdout.trim(), stderr: (stderr || (error?.message ?? "")).trim() });
     });
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(stdin ?? "");
   });
+}
+
+// Commits just these files, leaving whatever else agents have changed in the tree alone. The
+// message can hold an agent's words, so it goes through stdin like prompts do.
+export async function commitFiles(repo: string, files: string[], message: string): Promise<{ ok: boolean; error: string | null }> {
+  const add = await git(repo, ["add", "--", ...files]);
+  if (!add.ok) return { ok: false, error: add.stderr };
+  // A machine without a git identity still gets its design history.
+  const identity = (await git(repo, ["config", "user.email"])).stdout ? [] : ["-c", "user.name=AgentDashboard", "-c", "user.email=agentdashboard@localhost"];
+  const commit = await git(repo, [...identity, "commit", "-F", "-", "--only", "--", ...files], message);
+  if (!commit.ok && /nothing to commit|no changes added/i.test(commit.stderr + commit.stdout)) return { ok: true, error: null };
+  return { ok: commit.ok, error: commit.ok ? null : commit.stderr };
 }
 
 export type RepoCheck = { ok: true; path: string } | { ok: false; error: string; canInit: boolean };

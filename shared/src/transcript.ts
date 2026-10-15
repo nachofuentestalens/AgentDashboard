@@ -4,7 +4,8 @@ import type { AgentEvent } from "./events.ts";
 export type TranscriptItem =
   | { type: "text"; text: string; streaming: boolean }
   | { type: "tool"; id: string; name: string; input: unknown; result: string | null; isError: boolean }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "notice"; level: "info" | "warn"; text: string };
 
 export interface Transcript {
   items: TranscriptItem[];
@@ -46,6 +47,9 @@ export function applyEvent(t: Transcript, e: AgentEvent): Transcript {
       return { items: items.map((i) => (i.type === "text" && i.streaming ? { ...i, streaming: false } : i)), done: true };
     case "error":
       items.push({ type: "error", message: e.message });
+      break;
+    case "notice":
+      items.push({ type: "notice", level: e.level, text: e.text });
       break;
     case "init":
     case "stderr":

@@ -22,7 +22,10 @@ export function Button({ variant = "secondary", className = "", ...props }: Butt
 
 const statusStyle: Record<TaskStatus | RunStatus, { label: string; dot: string; text: string }> = {
   idle: { label: "Idle", dot: "bg-ink-400", text: "text-ink-300" },
+  queued: { label: "Queued", dot: "bg-sky-400", text: "text-sky-300" },
   running: { label: "Running", dot: "bg-accent animate-pulse", text: "text-accent" },
+  waiting: { label: "Waiting on you", dot: "bg-gold", text: "text-gold" },
+  done: { label: "Done", dot: "bg-emerald-400", text: "text-emerald-300" },
   succeeded: { label: "Done", dot: "bg-emerald-400", text: "text-emerald-300" },
   failed: { label: "Failed", dot: "bg-red-400", text: "text-red-300" },
   stopped: { label: "Stopped", dot: "bg-ink-400", text: "text-ink-300" },
@@ -36,6 +39,31 @@ export function StatusBadge({ status }: { status: TaskStatus | RunStatus }) {
       <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
       {s.label}
     </span>
+  );
+}
+
+// A task's priority (0-10), and the emergency flag that outranks it.
+export function PriorityBadge({ priority, emergency }: { priority: number; emergency?: boolean }) {
+  if (emergency) return <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-red-300 uppercase">⚠ Emergency</span>;
+  return (
+    <span className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-ink-300" title="Priority, 0 to 10">
+      P{priority}
+    </span>
+  );
+}
+
+export const selectClass = "rounded-md border border-ink-700 bg-ink-900 px-2 py-1 text-xs text-ink-200 focus:border-accent focus:outline-none";
+
+export function PrioritySelect({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled?: boolean }) {
+  return (
+    <select aria-label="Priority" className={selectClass} value={value} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))}>
+      {Array.from({ length: 11 }, (_, i) => 10 - i).map((p) => (
+        <option key={p} value={p}>
+          Priority {p}
+          {p === 10 ? " (top)" : p === 5 ? " (normal)" : p === 0 ? " (someday)" : ""}
+        </option>
+      ))}
+    </select>
   );
 }
 

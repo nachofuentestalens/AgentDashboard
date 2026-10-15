@@ -55,7 +55,27 @@ export function RunView({ run, isLatest }: { run: Run; isLatest: boolean }) {
 
   const stop = useMutation({ mutationFn: () => api.stopRun(run.id) });
   const retry = useMutation({ mutationFn: () => api.retryRun(run.id) });
+  const force = useMutation({ mutationFn: () => api.forceRun(run.id) });
   const canRetry = isLatest && (run.status === "failed" || run.status === "stopped" || run.status === "interrupted");
+
+  if (run.status === "queued")
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-sky-300">Queued for an agent.</p>
+        <p className="text-xs text-ink-400">{run.waitReason ?? "Waiting for the scheduler…"}</p>
+        <div className="flex gap-2">
+          {!run.forced && (
+            <Button variant="ghost" className="!px-2 !py-0.5 text-xs" onClick={() => force.mutate()} title="Ignore budgets and an open emergency for this run">
+              Run anyway
+            </Button>
+          )}
+          <Button variant="ghost" className="!px-2 !py-0.5 text-xs" onClick={() => stop.mutate()}>
+            ■ Take out of the queue
+          </Button>
+        </div>
+        <ErrorNote error={force.error ?? stop.error} />
+      </div>
+    );
 
   return (
     <div className="space-y-3">
@@ -65,6 +85,15 @@ export function RunView({ run, isLatest }: { run: Run; isLatest: boolean }) {
           <Markdown key={i} text={item.text} streaming={item.streaming && running} />
         ) : item.type === "tool" ? (
           <ToolRow key={item.id || i} item={item} />
+        ) : item.type === "notice" ? (
+          <div
+            key={i}
+            role="note"
+            className={`flex gap-1.5 rounded-md border px-3 py-1.5 text-xs ${item.level === "warn" ? "border-amber-500/30 bg-amber-500/10 text-amber-200" : "border-ink-700 bg-ink-900 text-ink-300"}`}
+          >
+            <span aria-hidden>{item.level === "warn" ? "⚠" : "→"}</span>
+            <Markdown text={item.text} />
+          </div>
         ) : (
           <p key={i} className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm whitespace-pre-wrap text-red-300">
             {item.message}
@@ -85,14 +114,17 @@ export function RunView({ run, isLatest }: { run: Run; isLatest: boolean }) {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-400">
         <StatusBadge status={run.status} />
         <span>
-          {modelLabel(run.model)} · {run.effort}
+          {modelLabel(run.model || (run.provider === "codex" ? "ChatGPT (Codex default)" : "Claude default"))} · {run.effort}
         </span>
         <span>{duration(run.startedAt, run.endedAt, now)}</span>
+        <span>
+          {run.toolCalls} tool calls{run.purpose === "handoff" ? " · handoff preparation" : ""}
+        </span>
         {/* A stopped or crashed run reports no usage; zeros would read as "free". */}
         {!running && (run.costUsd > 0 || run.usage.outputTokens > 0) && (
           <>
             <span>{usageLine(run.usage)}</span>
-            <span>{cost(run.costUsd)}</span>
+            <span>{run.provider === "codex" ? "Cost not reported" : cost(run.costUsd)}</span>
           </>
         )}
         {running && (

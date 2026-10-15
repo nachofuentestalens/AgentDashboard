@@ -1,6 +1,6 @@
 # AgentDashboard
 
-A local web dashboard for directing Claude Code agents on personal game projects. It runs on your PC, uses the `claude` CLI you already have (and your existing subscription), and keeps every conversation, run and cost in one place.
+A local web dashboard for directing Claude Code or ChatGPT (via Codex CLI) agents on personal game projects. It uses your installed, authenticated CLIs and records conversations, runs and reported usage.
 
 **Status: Phase 1.** Projects, chat tasks with live streaming and session resume, stop/retry, run history, and cost tracking. See [docs/ROADMAP.md](docs/ROADMAP.md) for what comes next (design docs and proposals, multi-step workflows, personas, playtest and balance steps).
 
@@ -35,16 +35,42 @@ This runs a built-in fake agent instead of Claude Code and keeps its data in `.d
 
 1. **Settings → Save and check Claude Code.** It searches PATH (and `%USERPROFILE%\.local\bin`) for `claude.exe` or `claude.cmd`. If it isn't found, paste the full path.
 2. **New project** (the + in the sidebar). Point it at the top folder of a game's git repository, or at an empty folder and click **Create git repository there**.
-3. **Start a chat** from the project's Tasks tab. Replies stream in live, and every follow-up continues the same Claude Code session.
+3. **Start a chat** from the project's Tasks tab. Replies stream in live, and every follow-up continues the same provider session.
 
 ## How agents run
 
-Each message starts `claude -p --output-format stream-json` in the project folder. The prompt goes through stdin, never through the command line.
+Each message starts `claude -p --output-format stream-json` or `codex exec --json` in the project folder. The prompt goes through stdin, never through the command line.
 
-- **Model and effort**: by default Opus 5.5 at medium effort. Change the default per project (Settings tab) or per chat (the pickers under the message box).
+- **Model and effort**: by default Sonnet 5 at medium effort. Change the default per project (Settings tab) or per chat (the pickers under the message box).
 - **Can edit files** (on by default): the agent may edit files (`--permission-mode acceptEdits`) and run only the commands listed in the project's **Allowed commands** (by default git, pnpm, npm, npx, node and PowerShell). Headless agents can't ask for permission, so anything else is refused and the agent will tell you.
 - **Read-only** (toggle off): the agent can read, search and browse, but can't edit or run commands.
 - **Phase 1 agents work directly in your project folder.** Commit before letting one loose. Phase 3 gives each task its own git worktree and branch.
+
+## Switching Claude / ChatGPT
+
+Install Codex CLI and run `codex login` once using your ChatGPT account. In Settings, use **Save and check Codex**; an empty CLI path searches PATH. Choose **ChatGPT (Codex)** in the **Provider** selector below the message box. Defaults can also be set in Settings, project settings, and each studio role. Leave the Codex model empty to use your CLI configuration.
+
+Same-provider follow-ups resume the session. Switching providers starts a new session with up to 8,000 characters of recent conversation; older messages and tool history are not transferred. The full dashboard history remains visible. This uses Codex, not a browser ChatGPT conversation. See [official non-interactive documentation](https://learn.chatgpt.com/docs/non-interactive-mode).
+
+Codex reports tokens, but this adapter does not receive a dollar cost. **Cost not reported** does not mean free; dollar budgets are not a reliable cap on Codex subscription usage. Claude's Allowed commands rules do not apply to Codex, which uses its own read-only/workspace-write sandbox.
+
+## Token efficiency
+
+Every work run instructs the agent to assess the task and current step **before tools or implementation**, recommend the least expensive capable model and sufficient effort, and reassess at phase boundaries. Keeping the current settings continues in the same run, avoiding a separate planner call. A worthwhile change ends the turn with a validated `model-review` and `context-handoff`; the dashboard starts the next step in a fresh session with the original request and summary. Model changes are limited to the selected provider's catalog (or the current custom model), supported provider effort levels, and three automatic changes per owner message. Usage remains cumulative, and changes made manually during a run take precedence. Model availability and capability are not exact price guarantees. Missing/malformed assessments produce a notice; this is an agent instruction, not a CLI-level guarantee that no tool can execute first.
+
+New projects use Sonnet/medium; new studio roles use Sonnet/medium or low. Existing saved model/effort choices are preserved: lower them in project/role settings if desired. Choose low effort for straightforward work and reserve higher effort for difficult tasks.
+
+Role context provides a bounded document catalog and reference paths, not document bodies. Agents read relevant documents on demand. Unchanged catalogs are omitted on follow-ups. Prompts request focused phases, bounded output, concise replies, and no speculative delegation.
+
+Open **Context & usage** in a task to prepare and review a compact handoff. **Prepare handoff** spends one read-only agent run summarizing the current session; you can also write a summary yourself without a model call. **Use compact handoff** keeps the complete dashboard transcript and starts a fresh CLI session on your next message, carrying only your summary and current project instructions. Include requirements, constraints, relevant files, completed checks, and remaining work. Optional automatic handoffs use a validated summary from the latest successful phase when you send the next message; they never start work on their own.
+
+Tasks start with checkpoints at **1,000,000 reported tokens (including cache and output)** and **80 tool calls**, including delegated descendants. Edit these allowances in Context & usage; a blank field means unlimited. Retries, provider switches and compaction do not reset usage. Token checks run when the provider reports final usage, so a single run may exceed its allowance. Tool checks stop the process after all observed pending tools report completion; parallel events or child processes can overshoot, and verification or summary generation may be interrupted. Partial transcripts remain available; write a handoff manually or explicitly raise the allowance to resume. These are approximate execution checkpoints, not billing caps. Missing provider usage remains unknown.
+
+Run footers separate fresh input, cached input, cache writes and output, and show tool-call counts. Task totals include delegated work; session age helps identify long conversations. New studio templates ask before delegating, and the default studio concurrency is one. Existing saved model, concurrency and autonomy choices remain unchanged.
+
+Use one chat per focused task. Keep the provider stable during that task to retain its session context. Studio departments set to Auto can create additional agent tasks; choose Ask before delegating for tighter control. Dollar budgets only gate queued role runs using estimates: plain chats and in-progress runs are not capped. These changes reduce avoidable overhead, not guarantee a fixed token ceiling.
+
+See [the setup audit](docs/TOKEN_EFFICIENCY.md) for findings and limitations.
 
 ## Where data lives
 
@@ -68,3 +94,5 @@ The server listens on `127.0.0.1` only and has no login, because it starts proce
 | `pnpm format`                | Prettier                                                                                                                       |
 
 See [CLAUDE.md](CLAUDE.md) for the architecture and conventions.
+
+Codex model choices refresh once whenever the server starts (`pnpm start`, `pnpm dev`, or a dev-server restart). All selectors use the first five visible, distinct entries in the installed CLI catalog order. Discovery uses `codex app-server` → `model/list` and sends no inference prompt. Codex may return cached/bundled metadata depending on its version/configuration; keep the CLI updated. If discovery fails, Settings shows a notice and the dashboard uses its last saved list; with no saved list, CLI default and custom model IDs remain available. Existing selected models are preserved even if no longer in the top five.

@@ -1,27 +1,34 @@
+import { useModelCatalog } from "../models.ts";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { EFFORT_LEVELS, MODEL_PRESETS, type Effort } from "@ad/shared";
+import { PROVIDERS, PROVIDER_EFFORTS, effortFor, type Provider, type Effort } from "@ad/shared";
 import { api, keys } from "../api.ts";
 import { Button, ErrorNote, Field, inputClass } from "../components/ui.tsx";
 
 export function SettingsPage() {
+  const catalog = useModelCatalog();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: keys.settings, queryFn: api.settings });
+  const [codexPath, setCodexPath] = useState("");
   const [claudePath, setClaudePath] = useState("");
+  const [provider, setProvider] = useState<Provider>("claude");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState<Effort>("medium");
 
   useEffect(() => {
     if (!settings.data) return;
     setClaudePath(settings.data.claudePath);
+    setProvider(settings.data.defaultProvider);
+    setCodexPath(settings.data.codexPath);
     setModel(settings.data.defaultModel);
     setEffort(settings.data.defaultEffort);
   }, [settings.data]);
 
   const save = useMutation({
-    mutationFn: () => api.updateSettings({ claudePath, defaultModel: model, defaultEffort: effort }),
+    mutationFn: () => api.updateSettings({ claudePath, codexPath, defaultProvider: provider, defaultModel: model, defaultEffort: effort }),
     onSuccess: (s) => qc.setQueryData(keys.settings, s),
   });
+  const checkCodex = useMutation({ mutationFn: api.checkCodex });
   const check = useMutation({ mutationFn: api.checkClaude });
 
   return (
@@ -51,7 +58,15 @@ export function SettingsPage() {
           />
         </Field>
         <div className="flex items-center gap-3">
-          <Button onClick={() => void save.mutateAsync().then(() => check.mutate())} disabled={check.isPending}>
+          <Button
+            onClick={() =>
+              void save
+                .mutateAsync()
+                .then(() => check.mutate())
+                .catch(() => {})
+            }
+            disabled={check.isPending}
+          >
             Save and check Claude Code
           </Button>
           {check.data?.ok && (
@@ -61,11 +76,57 @@ export function SettingsPage() {
           )}
           {check.data && !check.data.ok && <span className="text-sm text-red-300">{check.data.error}</span>}
         </div>
+        <Field
+          label="ChatGPT / Codex CLI path"
+          hint="Leave empty to find codex on PATH, or use fake for a free demo. Sign in once with codex login using your ChatGPT account."
+        >
+          <input className={inputClass} value={codexPath} onChange={(e) => setCodexPath(e.target.value)} />
+        </Field>
+        <Button
+          disabled={checkCodex.isPending}
+          onClick={() =>
+            void save
+              .mutateAsync()
+              .then(() => checkCodex.mutate())
+              .catch(() => {})
+          }
+        >
+          Save and check Codex
+        </Button>
+        {checkCodex.data && <p className="text-sm">{checkCodex.data.ok ? "Found " + checkCodex.data.version : checkCodex.data.error}</p>}
+        <p className="text-xs text-ink-400">
+          Codex models refresh on server startup: the first five visible entries in CLI catalog order. The CLI may use cached metadata; this is not a benchmark
+          ranking.
+        </p>
+        {catalog.status?.error && (
+          <p role="status" className="text-sm text-gold">
+            {catalog.status.error}
+          </p>
+        )}
+        <ErrorNote error={catalog.error} />
+        <Field label="Default provider">
+          <select
+            className={inputClass}
+            value={provider}
+            onChange={(e) => {
+              const p = e.target.value as Provider;
+              setProvider(p);
+              setModel("");
+              setEffort(effortFor(p, effort));
+            }}
+          >
+            {PROVIDERS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </Field>
         <div className="grid grid-cols-2 gap-4">
           <Field label="Default model for new projects">
             <input className={`${inputClass} font-mono`} list="settings-models" value={model} onChange={(e) => setModel(e.target.value)} />
             <datalist id="settings-models">
-              {MODEL_PRESETS.map((m) => (
+              {catalog.presets[provider].map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
                 </option>
@@ -74,13 +135,13 @@ export function SettingsPage() {
           </Field>
           <Field label="Default effort for new projects">
             <select className={inputClass} value={effort} onChange={(e) => setEffort(e.target.value as Effort)}>
-              {EFFORT_LEVELS.map((level) => (
+              {PROVIDER_EFFORTS[provider].map((level) => (
                 <option key={level}>{level}</option>
               ))}
             </select>
           </Field>
         </div>
-        <ErrorNote error={save.error ?? check.error} />
+        <ErrorNote error={save.error ?? check.error ?? checkCodex.error} />
         <div className="flex items-center gap-3">
           <Button type="submit" variant="primary" disabled={save.isPending}>
             Save

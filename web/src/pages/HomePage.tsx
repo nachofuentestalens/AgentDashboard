@@ -39,7 +39,7 @@ export function HomePage() {
                 and check that Claude Code is found.
               </li>
               <li>Create a project and point it at your game's repository folder (or an empty folder: the dashboard can run git init).</li>
-              <li>Start a chat from the project's Tasks tab.</li>
+              <li>Start a chat from the project's Tasks tab, or staff its Studio tab with roles and give them tasks.</li>
             </ol>
             <Button variant="primary" className="mt-4" onClick={() => openNewProject()}>
               Create your first project

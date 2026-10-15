@@ -1,15 +1,18 @@
+import { useModelCatalog } from "../models.ts";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
-import { DEFAULT_ALLOWED_TOOLS, EFFORT_LEVELS, MODEL_PRESETS, type Effort, type Project } from "@ad/shared";
+import { DEFAULT_ALLOWED_TOOLS, PROVIDERS, PROVIDER_EFFORTS, effortFor, type Provider, type Effort, type Project } from "@ad/shared";
 import { api, keys } from "../api.ts";
 import { Button, ErrorNote, Field, inputClass } from "../components/ui.tsx";
 
 export function ProjectSettings({ project }: { project: Project }) {
+  const catalog = useModelCatalog();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [name, setName] = useState(project.name);
   const [repoPath, setRepoPath] = useState(project.repoPath);
+  const [provider, setProvider] = useState<Provider>(project.defaultProvider);
   const [model, setModel] = useState(project.defaultModel);
   const [effort, setEffort] = useState<Effort>(project.defaultEffort);
   const [tools, setTools] = useState(project.allowedTools.join("\n"));
@@ -19,6 +22,7 @@ export function ProjectSettings({ project }: { project: Project }) {
       api.updateProject(project.id, {
         name,
         repoPath,
+        defaultProvider: provider,
         defaultModel: model,
         defaultEffort: effort,
         allowedTools: tools
@@ -47,11 +51,29 @@ export function ProjectSettings({ project }: { project: Project }) {
       <Field label="Repository folder">
         <input className={`${inputClass} font-mono`} value={repoPath} onChange={(e) => setRepoPath(e.target.value)} />
       </Field>
+      <Field label="Default provider">
+        <select
+          className={inputClass}
+          value={provider}
+          onChange={(e) => {
+            const p = e.target.value as Provider;
+            setProvider(p);
+            setModel("");
+            setEffort(effortFor(p, effort));
+          }}
+        >
+          {PROVIDERS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </Field>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Default model" hint="Any Claude model id works here.">
+        <Field label="Default model" hint="Use a model ID for the selected provider; empty uses its default.">
           <input className={`${inputClass} font-mono`} list="model-presets" value={model} onChange={(e) => setModel(e.target.value)} />
           <datalist id="model-presets">
-            {MODEL_PRESETS.map((m) => (
+            {catalog.presets[provider].map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
               </option>
@@ -60,7 +82,7 @@ export function ProjectSettings({ project }: { project: Project }) {
         </Field>
         <Field label="Default effort">
           <select className={inputClass} value={effort} onChange={(e) => setEffort(e.target.value as Effort)}>
-            {EFFORT_LEVELS.map((level) => (
+            {PROVIDER_EFFORTS[provider].map((level) => (
               <option key={level}>{level}</option>
             ))}
           </select>

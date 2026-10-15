@@ -15,6 +15,9 @@ export function Layout() {
   const taskMatch = useMatch("/tasks/:taskId");
   const task = useQuery({ queryKey: keys.task(taskMatch?.params.taskId ?? ""), queryFn: () => api.task(taskMatch!.params.taskId!), enabled: !!taskMatch });
   const activeProjectId = task.data?.task.projectId;
+  const inbox = useQuery({ queryKey: keys.inbox, queryFn: api.inbox });
+  const navClass = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center justify-between rounded-md px-2 py-1.5 text-sm ${isActive ? "bg-ink-800 text-ink-100" : "text-ink-300 hover:bg-ink-850 hover:text-ink-100"}`;
 
   return (
     <NewProjectContext.Provider value={() => setCreating(true)}>
@@ -49,12 +52,18 @@ export function Layout() {
             {projects.data?.length === 0 && <p className="px-2 py-1 text-xs text-ink-400">No projects yet.</p>}
           </nav>
           <div className="space-y-1 border-t border-ink-800 p-2">
-            <NavLink
-              to="/settings"
-              className={({ isActive }) =>
-                `block rounded-md px-2 py-1.5 text-sm ${isActive ? "bg-ink-800 text-ink-100" : "text-ink-300 hover:bg-ink-850 hover:text-ink-100"}`
-              }
-            >
+            <NavLink to="/inbox" className={navClass}>
+              Inbox
+              {!!inbox.data?.count && (
+                <span className="rounded-full bg-gold px-1.5 text-[11px] font-semibold text-ink-950" aria-label={`${inbox.data.count} waiting on you`}>
+                  {inbox.data.count}
+                </span>
+              )}
+            </NavLink>
+            <NavLink to="/compute" className={navClass}>
+              Compute
+            </NavLink>
+            <NavLink to="/settings" className={navClass}>
               Settings
             </NavLink>
             <p className="flex items-center gap-1.5 px-2 text-[11px] text-ink-400" title="Live connection to the dashboard server">

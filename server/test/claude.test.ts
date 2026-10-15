@@ -58,7 +58,7 @@ describe("finding Claude Code", () => {
     const dir = tmp();
     const shim = path.join(dir, "claude.cmd");
     fs.writeFileSync(shim, "@echo off\r\n");
-    expect(() => resolveCmdShim(shim)).toThrow(/Set the Claude path/);
+    expect(() => resolveCmdShim(shim)).toThrow(/Set the Claude Code path/);
   });
 
   it("searches PATH, preferring claude.exe on Windows", () => {

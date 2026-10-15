@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Run, Task } from "@ad/shared";
 import { buildApp, type App } from "../src/app.ts";
 import { FAKE_CLAUDE } from "../src/claude.ts";
+import { FAKE_CODEX } from "../src/codex.ts";
 
 export const tempDir = (prefix: string) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
@@ -16,14 +17,20 @@ export function gitRepo(): string {
 
 export async function testApp(dataDir = tempDir("ad-data-")): Promise<App & { dataDir: string }> {
   process.env.FAKE_CLAUDE_DELAY = "2";
-  const app = await buildApp({ dataDir, launcher: { command: process.execPath, prefix: [FAKE_CLAUDE], display: "fake" } });
+  const app = await buildApp({
+    dataDir,
+    launchers: {
+      claude: { command: process.execPath, prefix: [FAKE_CLAUDE], display: "fake" },
+      codex: { command: process.execPath, prefix: [FAKE_CODEX], display: "fake codex" },
+    },
+  });
   return Object.assign(app, { dataDir });
 }
 
 // Every request carries a loopback Host, like the browser would.
 export async function api<T = unknown>(
   app: App,
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   url: string,
   body?: unknown,
 ): Promise<{ status: number; body: T }> {
@@ -67,3 +74,21 @@ export const waitFor = async (check: () => boolean, ms = 5000) => {
     await new Promise((r) => setTimeout(r, 20));
   }
 };
+
+// Resolves when the task reaches one of these statuses.
+export async function taskReaches(app: App, taskId: string, statuses: Task["status"][], ms = 8000): Promise<Task> {
+  await waitFor(() => statuses.includes(app.store.getTask(taskId)?.status ?? "idle"), ms);
+  return app.store.getTask(taskId)!;
+}
+
+export const latestRun = (app: App, taskId: string) => app.store.listRuns(taskId).at(-1)!;
+
+export const reply = (app: App, taskId: string) =>
+  app.store
+    .listMessages(taskId)
+    .filter((m) => m.role === "assistant")
+    .at(-1)?.text ?? "";
+
+export function git(repo: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+}

@@ -22,7 +22,10 @@ export type AgentEvent =
       numTurns: number;
     }
   | { kind: "stderr"; text: string }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  // Written by the dashboard, not the agent: what it did with the reply (a task created, a
+  // proposal sent to the inbox, a block it could not read).
+  | { kind: "notice"; level: "info" | "warn"; text: string };
 
 export interface StampedEvent {
   seq: number;
@@ -36,4 +39,9 @@ export type ServerPush =
   | { type: "run_updated"; run: Run }
   | { type: "task_updated"; task: Task }
   | { type: "task_deleted"; taskId: string; projectId: string }
-  | { type: "projects_changed" };
+  | { type: "projects_changed" }
+  // Departments, roles or agents of a project changed.
+  | { type: "studio_changed"; projectId: string }
+  | { type: "inbox_changed" }
+  | { type: "docs_changed"; projectId: string }
+  | { type: "feedback_changed"; projectId: string };

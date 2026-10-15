@@ -23,7 +23,7 @@ test("create a project, chat with the agent, resume, stop and retry", async ({ p
   await expect(page.getByText("Bash")).toBeVisible();
   await expect(page.getByText("The working tree is clean.")).toBeVisible();
   await expect(page.getByText("Done", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Opus 5.5 · medium").first()).toBeVisible();
+  await expect(page.getByText("Sonnet 5 · medium").first()).toBeVisible();
   await page.getByText("Bash").click();
   await expect(page.getByText("nothing to commit, working tree clean")).toBeVisible();
   await page.screenshot({ path: "test-results/chat.png" });

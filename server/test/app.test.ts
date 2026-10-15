@@ -51,7 +51,7 @@ describe("projects", () => {
     const created = await api<Project>(app, "POST", "/api/projects", { name: "P", repoPath: path.join(plain, "new-game"), initGit: true });
     expect(created.status).toBe(201);
     expect(fs.existsSync(path.join(plain, "new-game", ".git"))).toBe(true);
-    expect(created.body.defaultModel).toBe("claude-opus-5-5");
+    expect(created.body.defaultModel).toBe("claude-sonnet-5");
     expect(created.body.defaultEffort).toBe("medium");
     expect(created.body.allowedTools).toContain("Bash(git:*)");
   });
@@ -80,7 +80,7 @@ describe("chat tasks", () => {
     expect(first.status).toBe("succeeded");
     expect(first.costUsd).toBeCloseTo(0.0123);
     expect(first.usage.outputTokens).toBe(45);
-    expect(first.model).toBe("claude-opus-5-5");
+    expect(first.model).toBe("claude-sonnet-5");
     expect(first.effort).toBe("medium");
 
     const events = (await api<StampedEvent[]>(app, "GET", `/api/runs/${first.id}/events`)).body;

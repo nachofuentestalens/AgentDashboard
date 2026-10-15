@@ -1,7 +1,11 @@
 import { MODEL_PRESETS, type Usage } from "@ad/shared";
 
 export function modelLabel(id: string): string {
-  return MODEL_PRESETS.find((m) => m.id === id)?.label ?? id;
+  return (
+    Object.values(MODEL_PRESETS)
+      .flat()
+      .find((m) => m.id === id)?.label ?? id
+  );
 }
 
 export function cost(usd: number): string {
@@ -17,8 +21,7 @@ export function tokens(n: number): string {
 }
 
 export function usageLine(u: Usage): string {
-  const input = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
-  return `${tokens(input)} in · ${tokens(u.outputTokens)} out`;
+  return `${tokens(u.inputTokens)} fresh in · ${tokens(u.cacheReadTokens)} cached in · ${tokens(u.cacheWriteTokens)} cache write · ${tokens(u.outputTokens)} out`;
 }
 
 export function ago(iso: string, now = Date.now()): string {

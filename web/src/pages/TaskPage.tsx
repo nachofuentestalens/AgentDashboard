@@ -1,14 +1,16 @@
 import { Fragment, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
-import type { Message, Run, TaskDetail } from "@ad/shared";
+import { resolveChoice, type Message, type Run, type TaskDetail } from "@ad/shared";
 import { api, keys } from "../api.ts";
 import { Composer } from "../components/Composer.tsx";
+import { EfficiencyPanel } from "../components/EfficiencyPanel.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { RunView } from "../components/RunView.tsx";
-import { Button, ErrorNote, StatusBadge, Toggle } from "../components/ui.tsx";
+import { Button, ErrorNote, PriorityBadge, PrioritySelect, StatusBadge, Toggle } from "../components/ui.tsx";
 import { cost } from "../format.ts";
+import { useRoles } from "./ProjectPage.tsx";
 
 // The conversation reads as: each message the developer sent, then the agent's run(s) on it
 // (more than one when a run was retried).
@@ -42,6 +44,7 @@ export function TaskPage() {
     mutationFn: () => api.deleteTask(taskId),
     onSuccess: () => void navigate(detail.data ? `/projects/${detail.data.task.projectId}` : "/"),
   });
+  const roles = useRoles(detail.data?.task.projectId ?? "");
 
   // Follow the stream while the reader is at the bottom; leave them alone if they scrolled up.
   const scroller = useRef<HTMLDivElement>(null);
@@ -70,8 +73,11 @@ export function TaskPage() {
   if (!detail.data) return null;
   const { task } = detail.data;
   const running = task.status === "running";
+  const busy = running || task.status === "queued";
   const latestRunId = detail.data.runs.at(-1)?.id;
   const totalCost = detail.data.runs.reduce((sum, r) => sum + r.costUsd, 0);
+  const role = roles.find((r) => r.role.id === task.roleId);
+  const agentName = role?.role.agents.find((a) => a.id === task.agentId)?.name;
 
   return (
     <div className="flex h-full flex-col">
@@ -94,15 +100,36 @@ export function TaskPage() {
             onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
           />
         </div>
+        {task.roleId && (
+          <>
+            <span className="text-xs text-ink-300" title="The role, and the agent that last worked on it">
+              {role ? `${role.role.name}${agentName && agentName !== role.role.name ? ` · ${agentName}` : ""}` : "Role"}
+            </span>
+            <PriorityBadge priority={task.priority} emergency={task.emergency} />
+            <PrioritySelect value={task.priority} onChange={(priority) => update.mutate({ priority })} />
+            <Toggle checked={task.emergency} onChange={(emergency) => update.mutate({ emergency })} label="Emergency" />
+          </>
+        )}
         <StatusBadge status={task.status} />
         <span className="text-xs text-ink-400" title="Total cost of this task">
           {cost(totalCost)}
         </span>
+        {task.status === "done" ? (
+          <Button variant="ghost" className="text-xs" onClick={() => update.mutate({ done: false })}>
+            Reopen
+          </Button>
+        ) : (
+          task.roleId && (
+            <Button variant="ghost" className="text-xs" disabled={busy} onClick={() => update.mutate({ done: true })} title="Nothing more to do here">
+              Mark done
+            </Button>
+          )
+        )}
         <Button
           variant="ghost"
           className="text-xs"
-          disabled={running}
-          title={running ? "Stop the agent first" : "Delete this task"}
+          disabled={busy}
+          title={busy ? "Stop the agent first" : "Delete this task"}
           onClick={() => {
             if (confirm("Delete this task and its history?")) remove.mutate();
           }}
@@ -110,6 +137,7 @@ export function TaskPage() {
           Delete
         </Button>
       </header>
+      <EfficiencyPanel key={task.id} detail={detail.data} />
 
       <div
         ref={scroller}
@@ -136,11 +164,32 @@ export function TaskPage() {
       </div>
 
       <div className="mx-auto w-full max-w-3xl px-6 pb-5">
+        {task.status === "waiting" && task.question && (
+          <div className="mb-2 rounded-xl border border-gold/40 bg-gold/10 px-4 py-3 text-sm">
+            <p className="text-xs font-semibold text-gold">The agent is waiting for your answer</p>
+            <div className="mt-1 text-ink-100">
+              <Markdown text={task.question} />
+            </div>
+            <p className="mt-1 text-xs text-ink-400">
+              Reply below, or answer from the{" "}
+              <Link to="/inbox" className="text-accent underline">
+                Inbox
+              </Link>{" "}
+              to record it in decisions.md.
+            </p>
+          </div>
+        )}
         <ErrorNote error={send.error ?? update.error ?? remove.error} />
         <Composer
-          placeholder={running ? "The agent is working. You can type your next message meanwhile." : "Reply to the agent…"}
-          disabled={running}
-          busy={send.isPending}
+          placeholder={
+            running
+              ? "The agent is working. You can type your next message meanwhile."
+              : task.status === "queued"
+                ? "Queued for an agent. You can type your next message meanwhile."
+                : "Reply to the agent…"
+          }
+          disabled={busy}
+          busy={send.isPending || update.isPending}
           onSend={(text) => {
             pinned.current = true;
             return send.mutateAsync(text);
@@ -155,9 +204,14 @@ export function TaskPage() {
               />
               {project.data && (
                 <ModelPicker
+                  provider={task.provider}
+                  disabled={busy || update.isPending}
                   model={task.model}
                   effort={task.effort}
-                  defaults={{ model: project.data.defaultModel, effort: project.data.defaultEffort }}
+                  defaults={resolveChoice([
+                    { provider: role?.role.provider ?? null, model: role?.role.model ?? null, effort: role?.role.effort ?? null },
+                    { provider: project.data.defaultProvider, model: project.data.defaultModel, effort: project.data.defaultEffort },
+                  ])}
                   onChange={(choice) => update.mutate(choice)}
                 />
               )}

@@ -2,29 +2,36 @@ import fs from "node:fs";
 import path from "node:path";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import { z } from "zod";
 import {
   createProjectBody,
+  compactTaskBody,
   createTaskBody,
   sendMessageBody,
   updateProjectBody,
   updateSettingsBody,
   updateTaskBody,
+  type Provider,
   type ServerPush,
   type TaskDetail,
 } from "@ad/shared";
 import { Bus } from "./bus.ts";
-import { checkClaude, type Launcher } from "./claude.ts";
+import { checkCli, type Launcher } from "./claude.ts";
+import { CODEX_CLI } from "./codex.ts";
+import { loadModelCatalog } from "./model-catalog.ts";
 import { openDb } from "./db.ts";
 import { checkRepo, initRepo } from "./git.ts";
-import { Runner, RunnerError } from "./runner.ts";
+import { HttpError, parse } from "./http.ts";
+import { Runner } from "./runner.ts";
 import { Store } from "./store.ts";
+import { Studio } from "./studio.ts";
+import { registerStudioRoutes } from "./studio-routes.ts";
 
 export interface AppOptions {
   dataDir: string;
   // Built web app to serve; absent in dev, where Vite serves it and proxies /api here.
   webDir?: string;
-  launcher?: Launcher;
+  // Tests start fake agents instead of the CLIs Settings point at.
+  launchers?: Partial<Record<Provider, Launcher>>;
   logger?: boolean;
 }
 
@@ -32,6 +39,7 @@ export interface App {
   fastify: FastifyInstance;
   store: Store;
   runner: Runner;
+  studio: Studio;
   bus: Bus;
   close: () => Promise<void>;
 }
@@ -46,13 +54,6 @@ function hostnameOf(value: string): string | null {
   }
 }
 
-function parse<T>(schema: z.ZodType<T>, body: unknown, reply: FastifyReply): T | null {
-  const result = schema.safeParse(body ?? {});
-  if (result.success) return result.data;
-  void reply.code(400).send({ error: result.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") });
-  return null;
-}
-
 const titleFrom = (text: string) => {
   const line = text.trim().split(/\r?\n/)[0] ?? "";
   return (line.length > 60 ? `${line.slice(0, 57)}…` : line) || "New chat";
@@ -63,8 +64,11 @@ export async function buildApp(options: AppOptions): Promise<App> {
   const db = openDb(path.join(options.dataDir, "dashboard.db"));
   const store = new Store(db);
   const bus = new Bus();
-  const runner = new Runner(store, bus, options.dataDir, options.launcher);
+  const runner = new Runner(store, bus, options.dataDir, options.launchers);
+  const studio = new Studio(store, bus, runner);
   store.markInterrupted();
+  const modelCatalog = await loadModelCatalog(options.dataDir, store.getSettings().codexPath, options.launchers?.codex);
+  runner.modelOptions = modelCatalog.presets;
 
   const app = Fastify({ logger: options.logger ? { level: "warn" } : false, bodyLimit: 2 * 1024 * 1024 });
 
@@ -82,7 +86,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   app.removeContentTypeParser("text/plain");
 
   app.setErrorHandler((error, _request, reply) => {
-    if (error instanceof RunnerError) return reply.code(error.status).send({ error: error.message });
+    if (error instanceof HttpError) return reply.code(error.status).send({ error: error.message });
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     if (status >= 500) app.log.error(error);
     return reply.code(status).send({ error: (error as Error).message });
@@ -94,14 +98,19 @@ export async function buildApp(options: AppOptions): Promise<App> {
   // ---- settings
 
   app.get("/api/settings", async () => store.getSettings());
+  app.get("/api/models", async () => modelCatalog);
 
   app.patch("/api/settings", async (request, reply) => {
     const body = parse(updateSettingsBody, request.body, reply);
     if (!body) return;
-    return store.updateSettings(body);
+    const settings = store.updateSettings(body);
+    // A higher limit or budget may let queued runs start.
+    runner.tick();
+    return settings;
   });
 
-  app.post("/api/settings/check-claude", async () => checkClaude(store.getSettings().claudePath));
+  app.post("/api/settings/check-claude", async () => checkCli(store.getSettings().claudePath));
+  app.post("/api/settings/check-codex", async () => checkCli(store.getSettings().codexPath, CODEX_CLI));
 
   // ---- projects
 
@@ -154,31 +163,59 @@ export async function buildApp(options: AppOptions): Promise<App> {
     const body = parse(createTaskBody, request.body, reply);
     if (!body) return;
     if (!store.getProject(request.params.id)) return notFound(reply, "Project");
-    const task = store.createTask({
+    const task = studio.createTask({
       projectId: request.params.id,
+      roleId: body.roleId ?? null,
       title: body.title || (body.message ? titleFrom(body.message) : "New chat"),
-      canEdit: body.canEdit ?? true,
+      message: body.message,
+      canEdit: body.canEdit,
+      provider: body.provider ?? null,
       model: body.model ?? null,
       effort: body.effort ?? null,
+      priority: body.priority,
+      emergency: body.emergency,
     });
-    bus.publish({ type: "task_updated", task });
-    if (body.message?.trim()) runner.send(task.id, body.message.trim());
-    return reply.code(201).send(store.getTask(task.id));
+    return reply.code(201).send(task);
   });
 
   app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
     const task = store.getTask(request.params.id);
     if (!task) return notFound(reply, "Task");
-    const detail: TaskDetail = { task, messages: store.listMessages(task.id), runs: store.listRuns(task.id) };
+    const detail: TaskDetail = { task, messages: store.listMessages(task.id), runs: store.listRuns(task.id), usageSummary: runner.usageSummary(task.id) };
     return detail;
   });
 
   app.patch<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
     const body = parse(updateTaskBody, request.body, reply);
     if (!body) return;
-    const task = store.updateTask(request.params.id, body);
-    if (!task) return notFound(reply, "Task");
+    const current = store.getTask(request.params.id);
+    if (!current) return notFound(reply, "Task");
+    if (
+      (current.status === "running" || current.status === "queued") &&
+      (body.tokenBudget !== undefined || body.toolBudget !== undefined || body.autoCompact !== undefined)
+    )
+      return reply.code(409).send({ error: "Wait for the agent or stop it before changing usage controls." });
+    const { done, ...patch } = body;
+    let status = current.status;
+    if (done !== undefined) {
+      if (current.status === "running" || current.status === "queued")
+        return reply.code(409).send({ error: "Stop the agent before closing or reopening this task." });
+      status = done ? "done" : "idle";
+    }
+    const task = store.updateTask(current.id, {
+      ...patch,
+      status,
+      // Closing a task answers nothing: the open question goes away with it.
+      question: done ? null : undefined,
+      // Only a role's task can be an emergency.
+      emergency: current.roleId ? patch.emergency : undefined,
+    })!;
     bus.publish({ type: "task_updated", task });
+    if (patch.priority !== undefined || patch.emergency !== undefined || done !== undefined) {
+      bus.publish({ type: "studio_changed", projectId: task.projectId });
+      bus.publish({ type: "inbox_changed" });
+      runner.tick();
+    }
     return task;
   });
 
@@ -201,6 +238,16 @@ export async function buildApp(options: AppOptions): Promise<App> {
 
   // ---- runs
 
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/prepare-handoff", async (request, reply) =>
+    reply.code(201).send(runner.prepareHandoff(request.params.id)),
+  );
+
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/compact", async (request, reply) => {
+    const body = parse(compactTaskBody, request.body, reply);
+    if (!body) return;
+    return runner.compact(request.params.id, body.summary);
+  });
+
   app.get<{ Params: { id: string } }>("/api/runs/:id/events", async (request, reply) => {
     if (!store.getRun(request.params.id)) return notFound(reply, "Run");
     return runner.readEvents(request.params.id);
@@ -212,6 +259,14 @@ export async function buildApp(options: AppOptions): Promise<App> {
   });
 
   app.post<{ Params: { id: string } }>("/api/runs/:id/retry", async (request, reply) => reply.code(201).send(runner.retry(request.params.id)));
+
+  app.post<{ Params: { id: string } }>("/api/runs/:id/force", async (request) => {
+    const run = runner.force(request.params.id);
+    bus.publish({ type: "inbox_changed" });
+    return run;
+  });
+
+  registerStudioRoutes(app, { store, bus, runner, studio });
 
   // ---- live updates
 
@@ -242,13 +297,17 @@ export async function buildApp(options: AppOptions): Promise<App> {
     });
   }
 
+  // Runs queued before a restart are still waiting for their turn.
+  runner.tick();
+
   return {
     fastify: app,
     store,
     runner,
+    studio,
     bus,
     close: async () => {
-      runner.stopAll();
+      runner.close();
       await app.close();
       db.close();
     },

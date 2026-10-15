@@ -1,0 +1,501 @@
+import {
+  effortFor,
+  MAX_DELEGATION_DEPTH,
+  MAX_PRIORITY,
+  parseReplyBlocks,
+  type Agent,
+  type AgentView,
+  type Compute,
+  type ComputeRun,
+  type Effort,
+  type Inbox,
+  type Proposal,
+  type Provider,
+  type Run,
+  type Studio as StudioView,
+  type Task,
+} from "@ad/shared";
+import type { Bus } from "./bus.ts";
+import { readDocText, safeDocPath, saveDocs } from "./docs.ts";
+import { HttpError } from "./http.ts";
+import { DECISIONS_DOC } from "./folders.ts";
+import type { Notice, ReplyHandler, Runner } from "./runner.ts";
+import { isHeldReason } from "./scheduler.ts";
+import type { Store } from "./store.ts";
+import { STUDIO_TEMPLATE } from "./template.ts";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const sinceDays = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString();
+
+export interface NewStudioTask {
+  projectId: string;
+  roleId: string | null;
+  title: string;
+  message?: string;
+  canEdit?: boolean;
+  provider?: Provider | null;
+  model?: string | null;
+  effort?: Effort | null;
+  priority?: number;
+  emergency?: boolean;
+  parentTaskId?: string | null;
+  depth?: number;
+  createdByRoleId?: string | null;
+}
+
+// The studio around the runner: its structure (departments, roles, agents), what agents ask for
+// at the end of a reply, and the owner's inbox. State changes happen here and in the runner, never
+// in the browser.
+export class Studio implements ReplyHandler {
+  constructor(
+    private readonly store: Store,
+    private readonly bus: Bus,
+    private readonly runner: Runner,
+  ) {
+    runner.replies = this;
+  }
+
+  private changed(projectId: string) {
+    this.bus.publish({ type: "studio_changed", projectId });
+    // Roles, agents and budgets all feed the scheduler.
+    this.runner.tick();
+  }
+
+  // ---- structure
+
+  view(projectId: string): StudioView {
+    const departments = this.store.listDepartments(projectId);
+    const roles = this.store.listRoles(projectId);
+    const agents = this.store.listAgents(projectId);
+    const active = this.runner.activeRuns();
+    const day = sinceDays(1);
+    const deptSpend = this.store.departmentSpendSince(day);
+    const deptSpendWeek = this.store.departmentSpendSince(sinceDays(7));
+    const roleSpend = this.store.roleSpendSince(day);
+    const agentSpend = this.store.agentSpendSince(day);
+    const costs = this.store.costByRoleEffort();
+    const queued = this.store.runsWithStatus("queued");
+    const waiting = this.store.waitingTasks();
+
+    const agentView = (agent: Agent): AgentView => {
+      const run = active.find((a) => a.agentId === agent.id);
+      const task = run ? this.store.getTask(run.taskId) : (waiting.find((t) => t.agentId === agent.id) ?? null);
+      const status = agent.paused ? "paused" : run ? "running" : task ? "waiting" : "idle";
+      return {
+        ...agent,
+        status,
+        runId: run?.runId ?? null,
+        taskId: task?.id ?? null,
+        taskTitle: task?.title ?? null,
+        spend24h: agentSpend.get(agent.id) ?? 0,
+      };
+    };
+
+    return {
+      projectId,
+      departments: departments.map((d) => ({
+        ...d,
+        roles: roles
+          .filter((r) => r.departmentId === d.id)
+          .map((r) => ({
+            ...r,
+            agents: agents.filter((a) => a.roleId === r.id).map(agentView),
+            queued: queued.filter((q) => q.roleId === r.id).length,
+            spend24h: roleSpend.get(r.id) ?? 0,
+            costByEffort: costs.get(r.id) ?? {},
+          })),
+        spend24h: deptSpend.get(d.id) ?? 0,
+        spend7d: deptSpendWeek.get(d.id) ?? 0,
+        writerRunId: active.find((a) => a.departmentId === d.id && a.canEdit)?.runId ?? null,
+      })),
+      emergencies: this.store.openEmergencies(projectId).map((t) => ({ taskId: t.id, title: t.title })),
+    };
+  }
+
+  applyTemplate(projectId: string): StudioView {
+    if (this.store.listDepartments(projectId).length > 0) throw new HttpError("This project already has departments. Remove them first to start over.", 409);
+    // The template's models are Claude's. On a Codex project its roles keep their efforts and use
+    // Codex's default model.
+    const provider = this.store.getProject(projectId)?.defaultProvider ?? "claude";
+    for (const t of STUDIO_TEMPLATE) {
+      const dept = this.store.createDepartment({
+        projectId,
+        name: t.name,
+        color: t.color,
+        weight: t.weight,
+        dailyBudgetUsd: null,
+        folders: t.folders,
+        autonomy: t.autonomy,
+      });
+      for (const r of t.roles) {
+        const role = this.store.createRole({
+          projectId,
+          departmentId: dept.id,
+          name: r.name,
+          brief: r.brief,
+          provider,
+          model: provider === "claude" ? r.model : null,
+          effort: effortFor(provider, r.effort),
+          canEdit: r.canEdit,
+          allowedTools: r.allowedTools,
+          contextDocs: r.contextDocs,
+        });
+        for (let i = 0; i < r.seats; i++) this.hire(role.id);
+      }
+    }
+    this.changed(projectId);
+    return this.view(projectId);
+  }
+
+  hire(roleId: string, name?: string): Agent {
+    const role = this.store.getRole(roleId);
+    if (!role) throw new HttpError("Role not found.", 404);
+    const n = this.store.countAgentsEver(roleId) + 1;
+    const agent = this.store.createAgent({ roleId, name: name || (n === 1 ? role.name : `${role.name} ${n}`) });
+    this.changed(role.projectId);
+    return agent;
+  }
+
+  removeAgent(agentId: string): void {
+    const agent = this.store.getAgent(agentId);
+    if (!agent) throw new HttpError("Agent not found.", 404);
+    if (this.runner.activeRuns().some((a) => a.agentId === agentId)) throw new HttpError("This agent is working. Stop its run first.", 409);
+    const role = this.store.getRole(agent.roleId);
+    this.store.removeAgent(agentId);
+    if (role) this.changed(role.projectId);
+  }
+
+  deleteRole(roleId: string): void {
+    const role = this.store.getRole(roleId);
+    if (!role) throw new HttpError("Role not found.", 404);
+    const busy = this.runner.activeRuns().some((a) => this.store.getTask(a.taskId)?.roleId === roleId);
+    if (busy || this.store.runsWithStatus("queued").some((r) => r.roleId === roleId))
+      throw new HttpError("This role has running or queued work. Stop it first.", 409);
+    this.store.deleteRole(roleId);
+    this.changed(role.projectId);
+  }
+
+  deleteDepartment(departmentId: string): void {
+    const dept = this.store.getDepartment(departmentId);
+    if (!dept) throw new HttpError("Department not found.", 404);
+    if (this.store.listRoles(dept.projectId).some((r) => r.departmentId === departmentId))
+      throw new HttpError("Move or remove this department's roles first.", 409);
+    this.store.deleteDepartment(departmentId);
+    this.changed(dept.projectId);
+  }
+
+  // ---- tasks
+
+  createTask(input: NewStudioTask): Task {
+    const role = input.roleId ? this.store.getRole(input.roleId) : null;
+    if (input.roleId && (!role || role.projectId !== input.projectId)) throw new HttpError("That role is not part of this project.", 400);
+    const task = this.store.createTask({
+      projectId: input.projectId,
+      title: input.title,
+      canEdit: role ? role.canEdit && input.canEdit !== false : (input.canEdit ?? true),
+      provider: input.provider ?? null,
+      model: input.model ?? null,
+      effort: input.effort ?? null,
+      roleId: role?.id ?? null,
+      priority: input.priority,
+      // Only a role's task can hold up the project; a plain chat runs anyway.
+      emergency: role ? (input.emergency ?? false) : false,
+      parentTaskId: input.parentTaskId ?? null,
+      depth: input.depth ?? 0,
+      createdByRoleId: input.createdByRoleId ?? null,
+    });
+    this.bus.publish({ type: "task_updated", task });
+    if (input.message?.trim()) this.runner.send(task.id, input.message.trim());
+    // An emergency freezes the project's other work at once.
+    if (task.emergency) this.changed(task.projectId);
+    return this.store.getTask(task.id)!;
+  }
+
+  // ---- what agents ask for at the end of a reply
+
+  afterReply(task: Task, run: Run, reply: string): { notices: Notice[]; waiting: boolean } {
+    const blocks = parseReplyBlocks(reply);
+    if (blocks.length === 0) return { notices: [], waiting: false };
+    const project = this.store.getProject(task.projectId);
+    if (!project) return { notices: [], waiting: false };
+    const role = task.roleId ? this.store.getRole(task.roleId) : null;
+    const dept = role ? this.store.getDepartment(role.departmentId) : null;
+    const notices: Notice[] = [];
+    const questions: string[] = [];
+    let inbox = false;
+
+    for (const block of blocks) {
+      if (block.type === "invalid") {
+        notices.push({ level: "warn", text: `Ignored a \`${block.lang}\` block: ${block.error}` });
+      } else if (block.type === "question") {
+        questions.push(block.question);
+      } else if (block.type === "proposal") {
+        try {
+          const docPath = safeDocPath(project.repoPath, block.docPath);
+          if (docPath === DECISIONS_DOC) throw new Error("the decision log is written by the dashboard only.");
+          this.store.createProposal({
+            projectId: project.id,
+            taskId: task.id,
+            runId: run.id,
+            roleName: role?.name ?? null,
+            docPath,
+            rationale: block.rationale,
+            body: block.body,
+          });
+          inbox = true;
+          notices.push({ level: "info", text: `Proposal for ${docPath} sent to the owner's inbox.` });
+        } catch (error) {
+          notices.push({ level: "warn", text: `Ignored a proposal: ${(error as Error).message}` });
+        }
+      } else {
+        const target = this.store.findRoleByName(project.id, block.role);
+        const depth = task.depth + 1;
+        const reason =
+          this.runner.budgetReason(task) ??
+          (!target
+            ? `there is no role called "${block.role}".`
+            : depth > MAX_DELEGATION_DEPTH
+              ? `it would be ${depth} levels of delegation deep; the limit is ${MAX_DELEGATION_DEPTH}.`
+              : !dept
+                ? "tasks suggested in a chat wait for your approval."
+                : dept.autonomy === "ask"
+                  ? `${dept.name} asks before creating tasks.`
+                  : null);
+        const label = `"${block.title}" for ${target?.name ?? block.role} (priority ${block.priority}/${MAX_PRIORITY}${block.emergency ? ", emergency" : ""})`;
+        const base = {
+          projectId: project.id,
+          fromTaskId: task.id,
+          fromRoleName: role?.name ?? null,
+          toRoleName: target?.name ?? block.role,
+          roleId: target?.id ?? null,
+          title: block.title,
+          prompt: block.prompt,
+          priority: block.priority,
+          emergency: block.emergency,
+          depth,
+        };
+        if (reason) {
+          this.store.createHandoff({ ...base, reason: `Waiting for you: ${reason}`, status: "pending", createdTaskId: null });
+          inbox = true;
+          notices.push({ level: "info", text: `Task ${label} waits for your approval in the Inbox: ${reason}` });
+        } else {
+          const created = this.createTask({
+            projectId: project.id,
+            roleId: target!.id,
+            title: block.title,
+            message: block.prompt,
+            priority: block.priority,
+            emergency: block.emergency,
+            parentTaskId: task.id,
+            depth,
+            createdByRoleId: role?.id ?? null,
+          });
+          this.store.createHandoff({ ...base, reason: null, status: "created", createdTaskId: created.id });
+          notices.push({ level: "info", text: `Created task ${label}.` });
+        }
+      }
+    }
+
+    if (questions.length) {
+      this.store.updateTask(task.id, { question: questions.join("\n\n") });
+      inbox = true;
+      notices.push({ level: "info", text: "Asked you a question. Answer it in the Inbox or reply below; the task waits until then." });
+    }
+    if (inbox) this.bus.publish({ type: "inbox_changed" });
+    return { notices, waiting: questions.length > 0 };
+  }
+
+  // ---- the owner's inbox
+
+  inbox(): Inbox {
+    const projects = new Map(this.store.listProjects().map((p) => [p.id, p]));
+    const name = (id: string) => projects.get(id)?.name ?? "?";
+    const proposals = this.store.pendingProposals().map((p) => {
+      const project = projects.get(p.projectId);
+      return { ...p, projectName: name(p.projectId), current: project ? readDocText(project.repoPath, p.docPath) : null };
+    });
+    const handoffs = this.store.pendingHandoffs().map((h) => ({ ...h, projectName: name(h.projectId) }));
+    const questions = this.store.waitingTasks().map((task) => ({ task, projectName: name(task.projectId) }));
+    const held = this.store
+      .runsWithStatus("queued")
+      .filter((run) => !run.forced && run.waitReason && isHeldReason(run.waitReason))
+      .flatMap((run) => {
+        const task = this.store.getTask(run.taskId);
+        return task ? [{ run, task, projectName: name(task.projectId) }] : [];
+      });
+    return { proposals, handoffs, questions, held, count: proposals.length + handoffs.length + questions.length + held.length };
+  }
+
+  private pendingProposal(id: string): { proposal: Proposal; repo: string } {
+    const proposal = this.store.getProposal(id);
+    if (!proposal) throw new HttpError("Proposal not found.", 404);
+    if (proposal.status !== "pending") throw new HttpError("This proposal was already decided.", 409);
+    const project = this.store.getProject(proposal.projectId);
+    if (!project) throw new HttpError("Project not found.", 404);
+    return { proposal, repo: project.repoPath };
+  }
+
+  async acceptProposal(id: string, editedBody?: string): Promise<{ proposal: Proposal; commitError: string | null }> {
+    const { proposal, repo } = this.pendingProposal(id);
+    const edited = editedBody !== undefined && editedBody !== proposal.body;
+    const body = editedBody ?? proposal.body;
+    const by = proposal.roleName ?? "an agent";
+    const saved = await saveDocs(repo, {
+      files: [{ path: proposal.docPath, content: body }],
+      decision: {
+        title: `${proposal.docPath} updated`,
+        body: `Proposed by ${by}${edited ? " and edited by the owner" : ""}; accepted by the owner.${proposal.rationale ? `\n\n${proposal.rationale}` : ""}`,
+      },
+      message: `Update ${proposal.docPath} (proposal by ${by})\n\n${proposal.rationale}`.trim(),
+    });
+    const decided = this.store.decideProposal(id, { status: "accepted", body })!;
+    this.bus.publish({ type: "inbox_changed" });
+    this.bus.publish({ type: "docs_changed", projectId: proposal.projectId });
+    return { proposal: decided, commitError: saved.commitError };
+  }
+
+  rejectProposal(id: string, reason?: string): Proposal {
+    const { proposal } = this.pendingProposal(id);
+    const decided = this.store.decideProposal(id, { status: "rejected", note: reason || null })!;
+    this.bus.publish({ type: "inbox_changed" });
+    // The agent learns why, in its own conversation, so its next attempt can do better.
+    const task = proposal.taskId ? this.store.getTask(proposal.taskId) : null;
+    if (reason && task && task.status !== "running" && task.status !== "queued")
+      this.runner.send(task.id, `The owner rejected your proposal for ${proposal.docPath}: ${reason}`);
+    return decided;
+  }
+
+  approveHandoff(id: string, patch: { roleId?: string; priority?: number; emergency?: boolean }): Task {
+    const handoff = this.store.getHandoff(id);
+    if (!handoff) throw new HttpError("Request not found.", 404);
+    if (handoff.status !== "pending") throw new HttpError("This request was already decided.", 409);
+    const roleId = patch.roleId ?? handoff.roleId ?? this.store.findRoleByName(handoff.projectId, handoff.toRoleName)?.id;
+    if (!roleId) throw new HttpError(`There is no role called "${handoff.toRoleName}". Pick one.`, 400);
+    const parent = handoff.fromTaskId ? this.store.getTask(handoff.fromTaskId) : null;
+    const task = this.createTask({
+      projectId: handoff.projectId,
+      roleId,
+      title: handoff.title,
+      message: handoff.prompt,
+      priority: patch.priority ?? handoff.priority,
+      emergency: patch.emergency ?? handoff.emergency,
+      parentTaskId: handoff.fromTaskId,
+      depth: handoff.depth,
+      createdByRoleId: parent?.roleId ?? null,
+    });
+    this.store.decideHandoff(id, { status: "created", createdTaskId: task.id });
+    this.bus.publish({ type: "inbox_changed" });
+    return task;
+  }
+
+  rejectHandoff(id: string): void {
+    const handoff = this.store.getHandoff(id);
+    if (!handoff) throw new HttpError("Request not found.", 404);
+    if (handoff.status !== "pending") throw new HttpError("This request was already decided.", 409);
+    this.store.decideHandoff(id, { status: "rejected" });
+    this.bus.publish({ type: "inbox_changed" });
+  }
+
+  async answer(taskId: string, text: string, record: boolean): Promise<{ run: Run; commitError: string | null }> {
+    const task = this.store.getTask(taskId);
+    if (!task) throw new HttpError("Task not found.", 404);
+    if (task.status !== "waiting" || !task.question) throw new HttpError("This task has no open question.", 409);
+    let commitError: string | null = null;
+    if (record) {
+      const project = this.store.getProject(task.projectId)!;
+      const asker = task.roleId ? (this.store.getRole(task.roleId)?.name ?? "An agent") : "An agent";
+      const saved = await saveDocs(project.repoPath, {
+        files: [],
+        decision: { title: task.title, body: `${asker} asked:\n\n> ${task.question.replace(/\n/g, "\n> ")}\n\nThe owner answered:\n\n${text}` },
+        message: `Record decision: ${task.title}`,
+      });
+      commitError = saved.commitError;
+      this.bus.publish({ type: "docs_changed", projectId: task.projectId });
+    }
+    const { run } = this.runner.send(taskId, text);
+    this.bus.publish({ type: "inbox_changed" });
+    return { run, commitError };
+  }
+
+  // ---- compute
+
+  compute(): Compute {
+    const settings = this.store.getSettings();
+    const projects = new Map(this.store.listProjects().map((p) => [p.id, p]));
+    const departments = this.store.listDepartments();
+    const day = sinceDays(1);
+    const deptSpend = this.store.departmentSpendSince(day);
+    const deptSpendWeek = this.store.departmentSpendSince(sinceDays(7));
+    const row = (run: Run): ComputeRun | null => {
+      const task = this.store.getTask(run.taskId);
+      if (!task) return null;
+      return {
+        run,
+        taskTitle: task.title,
+        projectId: task.projectId,
+        projectName: projects.get(task.projectId)?.name ?? "?",
+        roleName: run.roleId ? (this.store.getRole(run.roleId)?.name ?? null) : null,
+        agentName: run.agentId ? this.store.agentName(run.agentId) : null,
+        departmentName: run.departmentId ? (departments.find((d) => d.id === run.departmentId)?.name ?? null) : null,
+        priority: task.priority,
+        emergency: task.emergency,
+      };
+    };
+    const active = this.runner.activeRuns().flatMap((a) => {
+      const run = this.store.getRun(a.runId);
+      const r = run ? row(run) : null;
+      return r ? [r] : [];
+    });
+    const queued = this.store
+      .runsWithStatus("queued")
+      .flatMap((run) => {
+        const r = row(run);
+        return r ? [r] : [];
+      })
+      .sort((a, b) => Number(b.emergency) - Number(a.emergency) || b.priority - a.priority || a.run.startedAt.localeCompare(b.run.startedAt));
+    return {
+      maxConcurrentRuns: settings.maxConcurrentRuns,
+      dailyBudgetUsd: settings.dailyBudgetUsd,
+      spend24h: this.store.totalSpendSince(day),
+      active,
+      queued,
+      departments: departments.map((d) => ({
+        id: d.id,
+        projectId: d.projectId,
+        projectName: projects.get(d.projectId)?.name ?? "?",
+        name: d.name,
+        color: d.color,
+        weight: d.weight,
+        dailyBudgetUsd: d.dailyBudgetUsd,
+        spend24h: deptSpend.get(d.id) ?? 0,
+        spend7d: deptSpendWeek.get(d.id) ?? 0,
+      })),
+    };
+  }
+
+  // ---- feedback
+
+  triage(projectId: string, itemIds: string[], roleId: string, priority?: number): Task {
+    const project = this.store.getProject(projectId);
+    if (!project) throw new HttpError("Project not found.", 404);
+    const items = itemIds.map((id) => this.store.getFeedback(id)).filter((f) => f && f.projectId === projectId);
+    if (items.length === 0) throw new HttpError("Select feedback from this project.", 400);
+    const list = items.map((item, i) => `${i + 1}. (${item!.source}) ${item!.text.replace(/\s*\n\s*/g, " ")}`).join("\n");
+    const task = this.createTask({
+      projectId,
+      roleId,
+      title: `Triage ${items.length} feedback item${items.length === 1 ? "" : "s"}`,
+      priority,
+      message: [
+        `Triage this player feedback for "${project.name}".`,
+        "Group duplicates, weigh each point against the vision and current priorities, and create tasks (task blocks) for the right roles with honest priorities.",
+        "List anything you decide not to act on, and why.",
+        "",
+        list,
+      ].join("\n"),
+    });
+    for (const item of items) this.store.updateFeedback(item!.id, { status: "triaged", taskId: task.id });
+    this.bus.publish({ type: "feedback_changed", projectId });
+    return task;
+  }
+}

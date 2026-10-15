@@ -58,6 +58,126 @@ const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
+  // 2: the studio. Departments own folders, roles describe jobs, agents staff roles; role tasks
+  // queue with a priority; proposals, handoffs and feedback wait for the owner.
+  `
+  CREATE TABLE departments (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    weight INTEGER NOT NULL,
+    daily_budget_usd REAL,
+    folders TEXT NOT NULL,
+    autonomy TEXT NOT NULL,
+    sort INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX departments_project ON departments(project_id, sort);
+  CREATE TABLE roles (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    brief TEXT NOT NULL,
+    model TEXT,
+    effort TEXT,
+    can_edit INTEGER NOT NULL,
+    allowed_tools TEXT,
+    context_docs TEXT NOT NULL,
+    sort INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX roles_department ON roles(department_id, sort);
+  CREATE TABLE agents (
+    id TEXT PRIMARY KEY,
+    role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    paused INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX agents_role ON agents(role_id);
+  ALTER TABLE tasks ADD COLUMN role_id TEXT REFERENCES roles(id) ON DELETE SET NULL;
+  ALTER TABLE tasks ADD COLUMN agent_id TEXT;
+  ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 5;
+  ALTER TABLE tasks ADD COLUMN emergency INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN parent_task_id TEXT;
+  ALTER TABLE tasks ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN created_by_role_id TEXT;
+  ALTER TABLE tasks ADD COLUMN question TEXT;
+  ALTER TABLE runs ADD COLUMN role_id TEXT;
+  ALTER TABLE runs ADD COLUMN agent_id TEXT;
+  ALTER TABLE runs ADD COLUMN department_id TEXT;
+  ALTER TABLE runs ADD COLUMN wait_reason TEXT;
+  ALTER TABLE runs ADD COLUMN forced INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE runs ADD COLUMN prompt TEXT;
+  CREATE INDEX runs_status ON runs(status);
+  CREATE INDEX runs_ended ON runs(ended_at);
+  CREATE TABLE proposals (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    run_id TEXT,
+    role_name TEXT,
+    doc_path TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+  );
+  CREATE TABLE handoffs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    from_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    from_role_name TEXT,
+    to_role_name TEXT NOT NULL,
+    role_id TEXT REFERENCES roles(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    priority INTEGER NOT NULL,
+    emergency INTEGER NOT NULL,
+    depth INTEGER NOT NULL,
+    reason TEXT,
+    status TEXT NOT NULL,
+    created_task_id TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+  );
+  CREATE TABLE feedback (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX feedback_project ON feedback(project_id, created_at);
+  `,
+  // 3: Codex as a second provider next to Claude Code, chosen per project, role and task.
+  `
+  ALTER TABLE projects ADD COLUMN default_provider TEXT NOT NULL DEFAULT 'claude';
+  ALTER TABLE roles ADD COLUMN provider TEXT;
+  ALTER TABLE tasks ADD COLUMN provider TEXT;
+  ALTER TABLE tasks ADD COLUMN session_provider TEXT;
+  ALTER TABLE runs ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude';
+  UPDATE tasks SET session_provider = 'claude' WHERE session_id IS NOT NULL;
+  `,
+  // 4: Sessions can be replaced without losing task history or cumulative usage.
+  `
+  ALTER TABLE tasks ADD COLUMN handoff TEXT;
+  ALTER TABLE tasks ADD COLUMN handoff_run_id TEXT;
+  ALTER TABLE tasks ADD COLUMN auto_compact INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN token_budget INTEGER DEFAULT 1000000;
+  ALTER TABLE tasks ADD COLUMN tool_budget INTEGER DEFAULT 80;
+  ALTER TABLE runs ADD COLUMN tool_calls INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE runs ADD COLUMN purpose TEXT NOT NULL DEFAULT 'work';
+  UPDATE runs SET tool_calls = -1;
+  `,
 ];
 
 export type Db = DatabaseSync;

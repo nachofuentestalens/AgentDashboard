@@ -58,16 +58,37 @@ export function useLiveUpdates(qc: QueryClient): Connection {
             return { ...old, runs: exists ? old.runs.map((r) => (r.id === run.id ? run : r)) : [...old.runs, run] };
           });
           if (run.status !== "running") {
+            void qc.invalidateQueries({ queryKey: ["task"] });
             // The stored file now holds every event; the buffer is no longer needed.
             setTimeout(() => buffers.delete(run.id), 30_000);
             void qc.invalidateQueries({ queryKey: keys.task(run.taskId) });
           }
           void qc.invalidateQueries({ queryKey: ["tasks"] });
+          // Agents' states, queue positions and spend all follow runs.
+          void qc.invalidateQueries({ queryKey: ["studio"] });
+          void qc.invalidateQueries({ queryKey: keys.compute });
+          // A queued run's reason decides whether it is held in the inbox.
+          void qc.invalidateQueries({ queryKey: keys.inbox });
           break;
         }
         case "task_updated":
           qc.setQueryData<TaskDetail>(keys.task(push.task.id), (old) => (old ? { ...old, task: push.task } : old));
           void qc.invalidateQueries({ queryKey: keys.tasks(push.task.projectId) });
+          void qc.invalidateQueries({ queryKey: keys.studio(push.task.projectId) });
+          break;
+        case "studio_changed":
+          void qc.invalidateQueries({ queryKey: keys.studio(push.projectId) });
+          void qc.invalidateQueries({ queryKey: keys.compute });
+          break;
+        case "inbox_changed":
+          void qc.invalidateQueries({ queryKey: keys.inbox });
+          break;
+        case "docs_changed":
+          void qc.invalidateQueries({ queryKey: keys.docs(push.projectId) });
+          void qc.invalidateQueries({ queryKey: ["doc", push.projectId] });
+          break;
+        case "feedback_changed":
+          void qc.invalidateQueries({ queryKey: keys.feedback(push.projectId) });
           break;
         case "task_deleted":
           qc.removeQueries({ queryKey: keys.task(push.taskId) });
