@@ -79,6 +79,9 @@ export function Layout() {
                 {alerts.state === "on" ? "🔔 Desktop alerts on" : alerts.state === "blocked" ? "🔕 Desktop alerts blocked" : "🔕 Turn on desktop alerts"}
               </button>
             )}
+            <NavLink to="/coordinator" className={navClass}>
+              Coordinator
+            </NavLink>
             <NavLink to="/compute" className={navClass}>
               Compute
             </NavLink>

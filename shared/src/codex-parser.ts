@@ -1,5 +1,5 @@
 import type { AgentEvent } from "./events.ts";
-import { truncate } from "./parser.ts";
+import { codexRateLimits, truncate } from "./parser.ts";
 
 type Json = Record<string, unknown>;
 
@@ -133,7 +133,7 @@ export function createCodexParser(): (line: string) => AgentEvent[] {
         return [{ kind: "stderr", text: str(data.message) || "Codex reported an error." }];
 
       default:
-        return [];
+        return codexRateLimits(data);
     }
   };
 }

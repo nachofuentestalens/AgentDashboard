@@ -207,3 +207,34 @@ export type SaveDocBody = z.infer<typeof saveDocBody>;
 export type ApproveHandoffBody = z.infer<typeof approveHandoffBody>;
 export type AddFeedbackBody = z.infer<typeof addFeedbackBody>;
 export type TriageFeedbackBody = z.infer<typeof triageFeedbackBody>;
+
+const providerPlan = z.object({
+  sessionHours: z.number().min(1).max(24),
+  weeklyResetDay: z.number().int().min(0).max(6),
+  weeklyResetHour: z.number().int().min(0).max(23),
+  sessionTokenCap: z.number().int().min(1).max(1e12).nullable(),
+  weeklyTokenCap: z.number().int().min(1).max(1e13).nullable(),
+});
+export const coordinatorConfigBody = z.object({
+  mode: z.enum(["off", "advise", "auto"]),
+  sessionReservePct: z.number().min(0).max(90),
+  weeklyReservePct: z.number().min(0).max(90),
+  conserveMarginPct: z.number().min(0).max(50),
+  weeklyBurstPct: z.number().min(0).max(100),
+  conservePriority: z.number().int().min(MIN_PRIORITY).max(MAX_PRIORITY),
+  pauseRunning: z.boolean(),
+  resumePaused: z.boolean(),
+  fillIdle: z.boolean(),
+  switchProvider: z.boolean(),
+  plans: z.object({ claude: providerPlan, codex: providerPlan }),
+});
+// The owner copies a provider's usage page (Claude's /usage, ChatGPT's Codex usage) into the dashboard.
+export const quotaReadingBody = z.object({
+  provider,
+  window: z.enum(["session", "weekly"]),
+  usedPercent: z.number().min(0).max(100),
+  resetsAt: z.iso.datetime({ offset: true }).nullable(),
+});
+export const applyCoordinatorBody = z.object({ key: z.string().min(1).max(200) });
+export type CoordinatorConfigBody = z.infer<typeof coordinatorConfigBody>;
+export type QuotaReadingBody = z.infer<typeof quotaReadingBody>;

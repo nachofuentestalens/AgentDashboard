@@ -52,6 +52,7 @@ export function applyEvent(t: Transcript, e: AgentEvent): Transcript {
       items.push({ type: "notice", level: e.level, text: e.text });
       break;
     case "init":
+    case "rate_limit":
     case "stderr":
       return t;
   }

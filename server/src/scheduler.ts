@@ -1,4 +1,4 @@
-import type { Effort } from "@ad/shared";
+import type { Effort, Provider } from "@ad/shared";
 
 // Deciding which queued runs start is a pure function of this snapshot, so the rules can be tested
 // as a table. The runner builds the snapshot from the database and its live processes.
@@ -16,6 +16,14 @@ export interface QueuedRun {
   queuedAt: string;
   // What the run is expected to cost, to charge its department as it starts.
   estimateUsd: number;
+  // The provider it would run on, for the coordinator's holds.
+  provider?: Provider;
+}
+
+// The coordinator holds a provider's queued work: below minPriority, or all of it when null.
+export interface ProviderHold {
+  minPriority: number | null;
+  reason: string;
 }
 
 export interface ActiveRun {
@@ -45,6 +53,7 @@ export interface SchedulerState {
   frozenProjects: Set<string>;
   active: ActiveRun[];
   queued: QueuedRun[];
+  providerHolds?: Map<Provider, ProviderHold>;
 }
 
 export interface Plan {
@@ -61,7 +70,7 @@ const money = (n: number) => `$${n.toFixed(2)}`;
 
 // Held runs wait on a rule the owner can override with "run anyway" (a budget, an emergency),
 // unlike a busy agent or a full slot, which clear up by themselves.
-export const isHeldReason = (reason: string) => /daily budget|emergency task/.test(reason);
+export const isHeldReason = (reason: string) => /daily budget|emergency task|^Coordinator:/.test(reason);
 
 // Queue order inside a department, and among emergencies: higher priority first, then older.
 export function byPriority(a: QueuedRun, b: QueuedRun): number {
@@ -92,6 +101,8 @@ export function plan(input: SchedulerState): Plan {
       return `${deptName} reached its daily budget (${money(spend.get(q.departmentId) ?? 0)} of ${money(dept.budgetUsd)}).`;
     if (!q.forced && input.budgetUsd != null && globalSpend >= input.budgetUsd)
       return `The daily budget is reached (${money(globalSpend)} of ${money(input.budgetUsd)}).`;
+    const hold = q.provider ? input.providerHolds?.get(q.provider) : undefined;
+    if (!q.forced && hold && (hold.minPriority === null || q.priority < hold.minPriority)) return hold.reason;
     if (running >= input.maxConcurrent) return `Waiting for a free slot (${running} of ${input.maxConcurrent} agents running).`;
     return null;
   };

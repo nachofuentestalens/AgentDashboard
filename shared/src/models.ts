@@ -530,3 +530,121 @@ export interface ClaudeCheck {
 }
 
 export const emptyUsage = (): Usage => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+
+// ---- coordinator: keeps subscription usage away from the owner's reserve (docs/COORDINATOR.md)
+
+// session: the provider's short rolling limit (5 hours for Claude and ChatGPT plans); weekly: the long one.
+export type QuotaWindow = "session" | "weekly";
+export const QUOTA_WINDOWS: readonly QuotaWindow[] = ["session", "weekly"];
+// off: only shows usage. advise: lists decisions for the owner to apply. auto: applies them.
+export type CoordinatorMode = "off" | "advise" | "auto";
+export type QuotaLevel = "unknown" | "ok" | "conserve" | "reserve" | "exhausted";
+
+// A provider's own report of a limit (from its CLI), the owner's reading of a usage page, or a run
+// that failed on a limit.
+export interface QuotaReading {
+  provider: Provider;
+  window: QuotaWindow;
+  usedPercent: number | null;
+  resetsAt: string | null;
+  rejected: boolean;
+  source: "cli" | "owner" | "error";
+  at: string;
+}
+
+export interface ProviderPlan {
+  sessionHours: number;
+  // Local time of the weekly reset when no reading reports it. 0 = Sunday.
+  weeklyResetDay: number;
+  weeklyResetHour: number;
+  // Reported tokens (cache included) a full window allows, to estimate between readings. Null: unknown.
+  sessionTokenCap: number | null;
+  weeklyTokenCap: number | null;
+}
+
+export interface CoordinatorConfig {
+  mode: CoordinatorMode;
+  // Left free for the owner's own use; agents never start into it.
+  sessionReservePct: number;
+  weeklyReservePct: number;
+  // The band above the reserve where only important work starts.
+  conserveMarginPct: number;
+  // How far the week may run ahead of an even pace before work slows down.
+  weeklyBurstPct: number;
+  // While conserving, queued work below this priority waits.
+  conservePriority: number;
+  pauseRunning: boolean;
+  resumePaused: boolean;
+  // Start backlog work when a session window would otherwise reset unused.
+  fillIdle: boolean;
+  // Move held work to the other provider when that one has room.
+  switchProvider: boolean;
+  plans: Record<Provider, ProviderPlan>;
+}
+
+const DEFAULT_PLAN: ProviderPlan = { sessionHours: 5, weeklyResetDay: 1, weeklyResetHour: 0, sessionTokenCap: null, weeklyTokenCap: null };
+export const DEFAULT_COORDINATOR_CONFIG: CoordinatorConfig = {
+  mode: "advise",
+  sessionReservePct: 20,
+  weeklyReservePct: 15,
+  conserveMarginPct: 15,
+  weeklyBurstPct: 10,
+  conservePriority: 7,
+  pauseRunning: true,
+  resumePaused: true,
+  fillIdle: false,
+  switchProvider: false,
+  plans: { claude: { ...DEFAULT_PLAN }, codex: { ...DEFAULT_PLAN } },
+};
+
+export interface QuotaWindowView {
+  window: QuotaWindow;
+  usedPercent: number | null;
+  // estimate: a reading plus tokens since, or tokens against a cap. reset: the window reset since the last reading.
+  source: "cli" | "owner" | "error" | "estimate" | "reset" | "none";
+  resetsAt: string | null;
+  readingAt: string | null;
+  level: QuotaLevel;
+  // Weekly only: the most the week should have used by now at an even pace (plus the burst).
+  paceLimitPct: number | null;
+}
+
+export interface ProviderQuotaView {
+  provider: Provider;
+  level: QuotaLevel;
+  reason: string;
+  session: QuotaWindowView;
+  weekly: QuotaWindowView;
+  running: number;
+  queued: number;
+}
+
+export type CoordinatorActionType = "pause" | "resume" | "start" | "switch";
+
+export interface CoordinatorAction {
+  // Stable for the same decision about the same task, so the owner can apply a listed one.
+  key: string;
+  type: CoordinatorActionType;
+  taskId: string;
+  taskTitle: string;
+  runId: string | null;
+  provider: Provider;
+  // switch: the provider the task moves to.
+  to: Provider | null;
+  reason: string;
+}
+
+export interface CoordinatorLogEntry {
+  at: string;
+  by: "coordinator" | "owner";
+  action: CoordinatorAction;
+  error: string | null;
+}
+
+export interface CoordinatorView {
+  config: CoordinatorConfig;
+  providers: ProviderQuotaView[];
+  recommendations: CoordinatorAction[];
+  paused: { taskId: string; title: string; provider: Provider }[];
+  log: CoordinatorLogEntry[];
+}
