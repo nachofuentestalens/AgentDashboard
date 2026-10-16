@@ -6,7 +6,7 @@ Writing runs use a persistent Git worktree and branch per task. The project chec
 
 ## Initial baseline
 
-A new writing task requires a clean project checkout. Existing staged, unstaged and untracked files must be preserved and committed or shelved before starting it; the dashboard does not automatically attribute them to a task. Ignored files are excluded. An empty Git repository gets an empty orphan task baseline without moving its primary branch or index. Existing task worktrees resume even if the primary checkout later becomes dirty. Changing a project's repository does not redirect an existing task's worktree.
+A new writing task starts from the project's last commit. Existing staged, unstaged and untracked files in the project checkout are left untouched and are not copied into the task or attributed to it; the run posts a notice when there are any. Commit them first if the agent needs to see them. Ignored files are excluded. An empty Git repository gets an empty orphan task baseline without moving its primary branch or index. Existing task worktrees resume even if the primary checkout later becomes dirty. Changing a project's repository does not redirect an existing task's worktree.
 
 ## Checkpoint and resume
 
@@ -28,6 +28,6 @@ The UI distinguishes local checkpoints, backed-up commits, PR links and publicat
 
 Approval and Close do not deploy or merge by themselves. A merge leaves the running checkout unchanged. When ready to deploy, stop the dashboard, update its clean stable branch with `git pull --ff-only`, install/build as required, and restart. Each squash merge records a single commit that can be undone with `git revert <merge-commit>` and pushed through normal review. Create a new task for follow-up changes to a merged task. No worktree/branch is automatically deleted.
 
-An existing dirty installation needs a preserved, validated baseline commit before its first isolated writing task. Keep the source backup until that baseline is safely committed/published. This initial migration should not discard or automatically stash mixed changes belonging to previous tasks.
+An existing dirty installation can still start isolated writing tasks (so the dashboard can fix itself), but they branch from the last commit. Commit changes the agent should build on; nothing is discarded or stashed automatically.
 
-Tests in `server/test/workspaces.test.ts` cover primary checkout preservation, added/deleted/ignored files, stopped runs, restart reuse, dirty-baseline refusal, review isolation and wrong-branch recovery. `server/test/github.test.ts` uses a simulated GitHub API to cover exact-commit pushes, publication retry/failure, remote pinning, merge checks and externally merged PRs without network side effects. The chat e2e covers workspace status and Pause & checkpoint.
+Tests in `server/test/workspaces.test.ts` cover primary checkout preservation, added/deleted/ignored files, stopped runs, restart reuse, dirty checkouts starting from the last commit, review isolation and wrong-branch recovery. `server/test/github.test.ts` uses a simulated GitHub API to cover exact-commit pushes, publication retry/failure, remote pinning, merge checks and externally merged PRs without network side effects. The chat e2e covers workspace status and Pause & checkpoint.

@@ -1065,7 +1065,7 @@ export class Runner {
 
     const startAgent = async () => {
       let workspace = this.store.getWorkspace(task.id);
-      if (canEdit) workspace = await this.workspaces.ensure(task.id, project.repoPath);
+      if (canEdit) workspace = await this.workspaces.ensure(task.id, project.repoPath, (text) => record({ kind: "notice", level: "warn", text }));
       else if (workspace) await this.workspaces.verify(workspace);
       if (this.closed) return;
       if (active.stopRequested) {

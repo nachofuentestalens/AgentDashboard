@@ -44,7 +44,7 @@ Each message starts `claude -p --output-format stream-json` or `codex exec --jso
 - **Model and effort**: by default Sonnet 5 at medium effort. Change the default per project (Settings tab) or per chat (the pickers under the message box).
 - **Can edit files** (on by default): the agent may edit files (`--permission-mode acceptEdits`) and run only the commands listed in the project's **Allowed commands** (by default git, pnpm, npm, npx, node and PowerShell). Headless agents can't ask for permission, so anything else is refused and the agent will tell you.
 - **Read-only** (toggle off): the agent can read, search and browse, but can't edit or run commands.
-- **Writing agents use isolated task worktrees.** Commit or shelve existing project-folder changes before starting a new writing task. The server saves WIP checkpoints after runs and publishes them as GitHub draft PRs when `origin` and authentication are configured. Use **Pause & checkpoint** to stop and save work; **Merge on GitHub** requires passing checks and leaves the running checkout unchanged. See [setup and recovery](docs/WORKSPACES.md).
+- **Writing agents use isolated task worktrees.** A new writing task starts from the last commit; uncommitted project-folder changes stay where they are and the agent does not see them. The server saves WIP checkpoints after runs and publishes them as GitHub draft PRs when `origin` and authentication are configured. Use **Pause & checkpoint** to stop and save work; **Merge on GitHub** requires passing checks and leaves the running checkout unchanged. See [setup and recovery](docs/WORKSPACES.md).
 
 ## Switching Claude / ChatGPT
 

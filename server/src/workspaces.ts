@@ -38,15 +38,18 @@ export class Workspaces {
     if (branch !== w.branch) throw new Error(`The task worktree must remain on ${w.branch}; found ${branch}.`);
   }
 
-  async ensure(taskId: string, repoPath: string): Promise<TaskWorkspace> {
+  async ensure(taskId: string, repoPath: string, notice: (text: string) => void = () => {}): Promise<TaskWorkspace> {
     let workspace = this.store.getWorkspace(taskId);
     if (workspace && !samePath(workspace.repoPath, repoPath))
       throw new Error("This task belongs to its original repository. Create a new task for the new project path.");
     if (!workspace) {
-      // Mixed edits in the live checkout cannot safely be attributed to this task.
+      // Uncommitted edits are not attributed to the task: it starts from the last commit, and the
+      // live checkout is never touched, so they are safe. Refusing here would stop the dashboard fixing itself.
       const dirty = await checked(repoPath, ["status", "--porcelain"]);
       if (dirty)
-        throw new Error("Commit or shelve the existing changes in the project folder before starting an isolated task. No files were moved or discarded.");
+        notice(
+          "The project folder has uncommitted changes. This task starts from the last commit, so the agent will not see them; they stay untouched in the project folder.",
+        );
       const head = await git(repoPath, ["rev-parse", "--verify", "HEAD"]);
       let baseCommit: string;
       if (head.ok && COMMIT_ID.test(head.stdout)) baseCommit = head.stdout;

@@ -70,16 +70,24 @@ describe("isolated task workspaces", () => {
     expect(resumed.checkpointCommit).toBe(saved?.checkpointCommit);
   });
 
-  it("refuses a dirty primary tree without moving or committing existing changes", async () => {
+  it("starts from the last commit when the primary tree is dirty, leaving existing changes alone", async () => {
     const { instance, repo, projectId } = await setup();
     fs.writeFileSync(path.join(repo, "owner.txt"), "Owner changes");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "Owner edit\n");
     const task = await newTask(instance, projectId, { message: "[write-workspace]" });
-    const run = await runFinished(instance, instance.store.listRuns(task.id)[0]!.id);
-    expect(run.status).toBe("failed");
-    expect(run.error).toContain("existing changes");
-    expect(instance.store.getWorkspace(task.id)).toBeNull();
+    const runId = instance.store.listRuns(task.id)[0]!.id;
+    const run = await runFinished(instance, runId);
+    expect(run.status).toBe("succeeded");
+    const notices = instance.runner.readEvents(runId).flatMap((e) => (e.event.kind === "notice" ? [e.event.text] : []));
+    expect(notices.some((t) => t.includes("uncommitted changes"))).toBe(true);
+    const w = instance.store.getWorkspace(task.id)!;
+    expect(w.baseCommit).toBe(git(repo, "rev-parse", "HEAD"));
+    expect(fs.existsSync(path.join(w.path, "owner.txt"))).toBe(false);
+    // Checkout may convert line endings (core.autocrlf on Windows).
+    expect(fs.readFileSync(path.join(w.path, "tracked.txt"), "utf8").trimEnd()).toBe("Original");
     expect(fs.existsSync(path.join(repo, "agent-work.txt"))).toBe(false);
     expect(fs.readFileSync(path.join(repo, "owner.txt"), "utf8")).toBe("Owner changes");
+    expect(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8")).toBe("Owner edit\n");
   });
 
   it("checkpoints a stopped agent and retries in the same worktree", async () => {
