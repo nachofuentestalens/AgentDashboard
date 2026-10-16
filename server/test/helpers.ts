@@ -81,6 +81,15 @@ export async function taskReaches(app: App, taskId: string, statuses: Task["stat
   return app.store.getTask(taskId)!;
 }
 
+// A role task's agent finished a step: the task is idle and waits for the owner's review.
+export async function stepFinished(app: App, taskId: string, ms = 8000): Promise<Task> {
+  await waitFor(() => {
+    const task = app.store.getTask(taskId);
+    return task?.status === "idle" && task.stage === "needs_review";
+  }, ms);
+  return app.store.getTask(taskId)!;
+}
+
 export const latestRun = (app: App, taskId: string) => app.store.listRuns(taskId).at(-1)!;
 
 export const reply = (app: App, taskId: string) =>

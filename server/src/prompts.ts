@@ -54,6 +54,50 @@ export function roleSystemPrompt(input: { projectName: string; department: Depar
     "```",
     "",
     "Asks the owner something you cannot decide yourself. Your task pauses until they answer.",
+    "",
+    "```step",
+    `{"state": "done", "summary": "What this turn finished, in one line", "next": "The following step, if any"}`,
+    "```",
+    "",
+    'End every reply with one step block. "done": a step is finished and more remain. "complete": the whole task is finished. "partial": you stopped mid-step and will continue. The owner reviews each finished step before you go on.',
+    "",
+    "```plan",
+    `{"steps": ["Short title of each step not finished yet, including the one this reply finishes"]}`,
+    "```",
+    "",
+    "Optional, for work that takes several steps: give a plan on your first reply, and again only when it changes.",
+  ].join("\n");
+}
+
+// The fixed prompt of a review run. The reviewer starts fresh, so everything it needs is here.
+export function reviewPrompt(input: { title: string; request: string; summary: string | null; diff: string; status: string }): string {
+  return [
+    "Review the work another agent did on the task below. You cannot edit files: read the changes, the relevant design documents and code,",
+    "and run read-only checks if they help. Judge whether the work does what was asked, correctly and safely.",
+    "",
+    `Task: ${input.title}`,
+    "",
+    "Request:",
+    input.request.slice(0, 4000),
+    "",
+    `Author's summary of the step: ${input.summary ?? "(none given)"}`,
+    "",
+    "Changed files (git status --short):",
+    input.status || "(none)",
+    "",
+    "Diff since the task began:",
+    "```diff",
+    input.diff || "(empty)",
+    "```",
+    "",
+    "End your reply with exactly one review block:",
+    "",
+    "```review",
+    `{"verdict": "pass", "findings": ["path/to/file.ts:42 what is wrong and why"]}`,
+    "```",
+    "",
+    'Use "changes" only for problems that must be fixed before the owner approves; otherwise "pass", with any minor notes as findings.',
+    "Only the owner approves. Your verdict is advice.",
   ].join("\n");
 }
 

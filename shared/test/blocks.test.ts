@@ -19,6 +19,38 @@ describe("reply blocks", () => {
     ]);
   });
 
+  it("reads step blocks, and refuses an unknown state", () => {
+    const blocks = parseReplyBlocks(
+      [
+        fence("step", JSON.stringify({ state: "done", summary: "Added dash.", next: "Tune the cooldown." })),
+        fence("step", JSON.stringify({ state: "complete", next: "" })),
+        fence("step", JSON.stringify({ state: "finished" })),
+      ].join("\n"),
+    );
+    expect(blocks).toMatchObject([
+      { type: "step", state: "done", summary: "Added dash.", next: "Tune the cooldown." },
+      { type: "step", state: "complete", summary: "", next: null },
+      { type: "invalid", lang: "step" },
+    ]);
+  });
+
+  it("reads review and plan blocks", () => {
+    const blocks = parseReplyBlocks(
+      [
+        fence("review", JSON.stringify({ verdict: "changes", findings: ["a.ts:1 bug"] })),
+        fence("review", JSON.stringify({ verdict: "approve" })),
+        fence("plan", JSON.stringify({ steps: ["Add dash", "Tune it"] })),
+        fence("plan", JSON.stringify({ steps: [] })),
+      ].join("\n"),
+    );
+    expect(blocks).toMatchObject([
+      { type: "review", verdict: "changes", findings: ["a.ts:1 bug"] },
+      { type: "invalid", lang: "review" },
+      { type: "plan", steps: ["Add dash", "Tune it"] },
+      { type: "invalid", lang: "plan" },
+    ]);
+  });
+
   it("clamps and rounds priorities instead of refusing them", () => {
     const blocks = parseReplyBlocks(
       [

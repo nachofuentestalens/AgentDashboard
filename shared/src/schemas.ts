@@ -49,6 +49,9 @@ export const updateProjectBody = z.object({
   defaultModel: defaultModel.optional(),
   defaultEffort: effort.optional(),
   allowedTools: z.array(toolRule).max(50).optional(),
+  autoReview: z.boolean().optional(),
+  autoContinueSteps: z.number().int().min(0).max(20).optional(),
+  startNextWhenIdle: z.boolean().optional(),
 });
 
 export const createTaskBody = z.object({
@@ -76,9 +79,29 @@ export const updateTaskBody = z.object({
   effort: effort.nullable().optional(),
   priority: priority.optional(),
   emergency: z.boolean().optional(),
-  // true: mark it done; false: reopen it as idle.
+  // A plain chat: true marks it done, false reopens it. A role task: approve and close, or reopen.
   done: z.boolean().optional(),
+  // Role tasks only. Null: the role's default reviewer.
+  reviewerRoleId: z.string().max(64).nullable().optional(),
 });
+
+const actionText = z.string().trim().min(1).max(100_000);
+
+// Owner moves through a role task's stages (docs/TASK_STATES.md). The server decides whether the
+// move is allowed (stages.ts).
+export const taskActionBody = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("start"), text: actionText.optional() }),
+  z.object({ action: z.literal("continue"), text: actionText.optional() }),
+  z.object({ action: z.literal("request_changes"), text: actionText }),
+  z.object({ action: z.literal("fix"), text: actionText.optional() }),
+  // roleId: a one-off reviewer instead of the task's or role's configured one.
+  z.object({ action: z.literal("review"), roleId: z.string().max(64).optional() }),
+  z.object({ action: z.literal("approve"), force: z.boolean().optional() }),
+  z.object({ action: z.literal("close") }),
+  z.object({ action: z.literal("reopen") }),
+  z.object({ action: z.literal("backlog") }),
+]);
+export type TaskAction = z.infer<typeof taskActionBody>;
 
 export const sendMessageBody = z.object({
   text: z.string().trim().min(1).max(100_000),
@@ -128,6 +151,8 @@ export const roleFields = z.object({
   canEdit: z.boolean(),
   allowedTools: z.array(toolRule).max(50).nullable(),
   contextDocs: z.array(docPathSchema).max(10),
+  // Null: tasks of this role review with the role itself, in a fresh session.
+  reviewerRoleId: z.string().max(64).nullable(),
 });
 export const createRoleBody = roleFields.partial().required({ departmentId: true, name: true });
 export const updateRoleBody = roleFields.partial();

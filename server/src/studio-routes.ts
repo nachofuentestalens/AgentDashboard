@@ -96,6 +96,8 @@ export function registerStudioRoutes(app: FastifyInstance, ctx: { store: Store; 
     const dept = store.getDepartment(body.departmentId);
     if (!dept || dept.projectId !== request.params.id) throw new HttpError("That department is not part of this project.", 400);
     if (store.findRoleByName(request.params.id, body.name)) throw new HttpError(`There is already a role called "${body.name}".`, 409);
+    if (body.reviewerRoleId && store.getRole(body.reviewerRoleId)?.projectId !== request.params.id)
+      throw new HttpError("The reviewer must be a role in this project.", 400);
     const role = store.createRole({
       projectId: request.params.id,
       departmentId: dept.id,
@@ -107,6 +109,7 @@ export function registerStudioRoutes(app: FastifyInstance, ctx: { store: Store; 
       canEdit: body.canEdit ?? false,
       allowedTools: body.allowedTools ?? null,
       contextDocs: body.contextDocs ?? [],
+      reviewerRoleId: body.reviewerRoleId ?? null,
     });
     studio.hire(role.id);
     return reply.code(201).send(role);
@@ -124,6 +127,8 @@ export function registerStudioRoutes(app: FastifyInstance, ctx: { store: Store; 
     // Agents name roles in task blocks, so names stay unique within a project.
     const clash = body.name ? store.findRoleByName(current.projectId, body.name) : null;
     if (clash && clash.id !== current.id) throw new HttpError(`There is already a role called "${body.name}".`, 409);
+    if (body.reviewerRoleId && store.getRole(body.reviewerRoleId)?.projectId !== current.projectId)
+      throw new HttpError("The reviewer must be a role in this project.", 400);
     const role = store.updateRole(current.id, body)!;
     changed(role.projectId);
     return role;

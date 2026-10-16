@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { lineDiff, type Handoff, type Inbox, type InboxQuestion, type InboxRun } from "@ad/shared";
 import { api, keys } from "../api.ts";
 import { Markdown } from "../components/Markdown.tsx";
+import { StageActions } from "../components/StageActions.tsx";
 import { Button, ErrorNote, inputClass, PriorityBadge, PrioritySelect, Toggle } from "../components/ui.tsx";
 import { ago } from "../format.ts";
 import { RoleSelect } from "./ProjectPage.tsx";
@@ -26,6 +27,20 @@ export function InboxPage() {
           <Section title="Questions">
             {data.questions.map((q) => (
               <QuestionCard key={q.task.id} q={q} />
+            ))}
+          </Section>
+        )}
+        {data && data.reviews.length > 0 && (
+          <Section title="Ready for review">
+            {data.reviews.map((r) => (
+              <StageCard key={r.task.id} item={r} />
+            ))}
+          </Section>
+        )}
+        {data && data.changes.length > 0 && (
+          <Section title="Changes requested">
+            {data.changes.map((r) => (
+              <StageCard key={r.task.id} item={r} />
             ))}
           </Section>
         )}
@@ -99,6 +114,25 @@ function QuestionCard({ q }: { q: InboxQuestion }) {
         <Toggle checked={record} onChange={setRecord} label="Record in decisions.md" />
       </div>
       <ErrorNote error={answer.error} />
+    </article>
+  );
+}
+
+function StageCard({ item }: { item: InboxQuestion }) {
+  const { task } = item;
+  return (
+    <article className={card} aria-label={`Review: ${task.title}`}>
+      <div className="flex items-center gap-2">
+        <PriorityBadge priority={task.priority} emergency={task.emergency} />
+        <Link to={`/tasks/${task.id}`} className="text-sm font-medium text-ink-100 hover:underline">
+          {task.title}
+        </Link>
+        {task.stepState === "complete" && <span className="text-[10px] font-semibold text-emerald-300 uppercase">Agent: complete</span>}
+        <span className="ml-auto text-xs text-ink-400">{item.projectName}</span>
+      </div>
+      {task.stepSummary && <p className="text-sm text-ink-200">{task.stepSummary}</p>}
+      {task.nextStep && <p className="text-xs text-ink-400">Next: {task.nextStep}</p>}
+      <StageActions task={task} />
     </article>
   );
 }

@@ -118,7 +118,7 @@ export function RunView({ run, isLatest }: { run: Run; isLatest: boolean }) {
         </span>
         <span>{duration(run.startedAt, run.endedAt, now)}</span>
         <span>
-          {run.toolCalls} tool calls{run.purpose === "handoff" ? " · handoff preparation" : ""}
+          {run.toolCalls} tool calls{run.purpose === "handoff" ? " · handoff preparation" : run.purpose === "review" ? " · review (read-only)" : ""}
         </span>
         {/* A stopped or crashed run reports no usage; zeros would read as "free". */}
         {!running && (run.costUsd > 0 || run.usage.outputTokens > 0) && (

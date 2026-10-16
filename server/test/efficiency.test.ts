@@ -100,6 +100,14 @@ it("rejects missing fields, oversized and ambiguous generated handoffs", () => {
   expect(extractHandoff("No summary")).toBeNull();
 });
 
+it("accepts list fields, CRLF line endings and a json label on generated handoffs", () => {
+  const body = { goal: "g", constraints: "c", files: ["a.ts", "b.ts"], completed: "x".repeat(2500), verification: "v", remaining: ["r"] };
+  const parsed = extractHandoff("Done.\r\n\r\n```context-handoff json\r\n" + JSON.stringify(body, null, 2).replace(/\n/g, "\r\n") + "\r\n```\r\n");
+  expect(parsed).toContain("FILES\n- a.ts\n- b.ts");
+  expect(parsed).toContain("REMAINING\n- r");
+  expect(extractHandoff(JSON.stringify(body, null, 2))).toBe(parsed);
+});
+
 it("queues delegation requests in the inbox when the parent exhausts its allowance", async () => {
   app = await testApp();
   const project = await newProject(app);
@@ -109,8 +117,8 @@ it("queues delegation requests in the inbox when the parent exhausts its allowan
   const task = await newTask(app, project, { roleId: qa.id });
   await api(app, "PATCH", `/api/tasks/${task.id}`, { tokenBudget: 1000 });
   app.runner.send(task.id, "Found issue [task:Gameplay Programmer:8]");
-  const { taskReaches } = await import("./helpers.ts");
-  await taskReaches(app, task.id, ["done"]);
+  const { stepFinished } = await import("./helpers.ts");
+  await stepFinished(app, task.id);
   const inbox = await api<{ handoffs: { reason: string }[] }>(app, "GET", "/api/inbox");
   expect(inbox.body.handoffs[0]?.reason).toContain("Usage checkpoint reached");
   expect(app.store.listTasks(project)).toHaveLength(1);
