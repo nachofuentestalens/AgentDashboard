@@ -5,6 +5,8 @@ import { PROVIDERS, PROVIDER_EFFORTS, effortFor, type Provider, type Effort } fr
 import { api, keys } from "../api.ts";
 import { Button, ErrorNote, Field, inputClass } from "../components/ui.tsx";
 
+const limit = (value: string) => (value.trim() === "" ? null : Number(value));
+
 export function SettingsPage() {
   const catalog = useModelCatalog();
   const qc = useQueryClient();
@@ -14,9 +16,14 @@ export function SettingsPage() {
   const [provider, setProvider] = useState<Provider>("claude");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState<Effort>("medium");
+  // Kept as text so an empty field can mean unlimited.
+  const [tokenBudget, setTokenBudget] = useState("");
+  const [toolBudget, setToolBudget] = useState("");
 
   useEffect(() => {
     if (!settings.data) return;
+    setTokenBudget(settings.data.defaultTokenBudget?.toString() ?? "");
+    setToolBudget(settings.data.defaultToolBudget?.toString() ?? "");
     setClaudePath(settings.data.claudePath);
     setProvider(settings.data.defaultProvider);
     setCodexPath(settings.data.codexPath);
@@ -25,7 +32,16 @@ export function SettingsPage() {
   }, [settings.data]);
 
   const save = useMutation({
-    mutationFn: () => api.updateSettings({ claudePath, codexPath, defaultProvider: provider, defaultModel: model, defaultEffort: effort }),
+    mutationFn: () =>
+      api.updateSettings({
+        claudePath,
+        codexPath,
+        defaultProvider: provider,
+        defaultModel: model,
+        defaultEffort: effort,
+        defaultTokenBudget: limit(tokenBudget),
+        defaultToolBudget: limit(toolBudget),
+      }),
     onSuccess: (s) => qc.setQueryData(keys.settings, s),
   });
   const checkCodex = useMutation({ mutationFn: api.checkCodex });
@@ -141,6 +157,31 @@ export function SettingsPage() {
             </select>
           </Field>
         </div>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Default task token allowance" hint="Reported tokens, cached included. Empty: unlimited.">
+            <input
+              className={inputClass}
+              type="number"
+              min="1"
+              max="1000000000"
+              value={tokenBudget}
+              onChange={(e) => setTokenBudget(e.target.value)}
+              placeholder="Unlimited"
+            />
+          </Field>
+          <Field label="Default task tool-call allowance" hint="Empty: unlimited.">
+            <input
+              className={inputClass}
+              type="number"
+              min="1"
+              max="100000"
+              value={toolBudget}
+              onChange={(e) => setToolBudget(e.target.value)}
+              placeholder="Unlimited"
+            />
+          </Field>
+        </div>
+        <p className="text-xs text-ink-400">New tasks start with these allowances. Existing tasks keep theirs; change them on the task page.</p>
         <ErrorNote error={save.error ?? check.error ?? checkCodex.error} />
         <div className="flex items-center gap-3">
           <Button type="submit" variant="primary" disabled={save.isPending}>

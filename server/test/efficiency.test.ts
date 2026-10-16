@@ -16,6 +16,18 @@ async function send(taskId: string, text: string) {
   return runFinished(app!, result.body.run.id);
 }
 
+it("new tasks take their allowances from Settings", async () => {
+  app = await testApp();
+  const project = await newProject(app);
+  const before = await newTask(app, project, { title: "Before" });
+  expect([before.tokenBudget, before.toolBudget]).toEqual([1_000_000, 80]);
+  const patched = await api(app, "PATCH", "/api/settings", { defaultTokenBudget: 250_000, defaultToolBudget: null });
+  expect(patched.body).toMatchObject({ defaultTokenBudget: 250_000, defaultToolBudget: null });
+  const after = await newTask(app, project, { title: "After" });
+  expect([after.tokenBudget, after.toolBudget]).toEqual([250_000, null]);
+  expect(app.store.getTask(before.id)!.tokenBudget).toBe(1_000_000);
+});
+
 it.each(["claude", "codex"] as const)("%s compaction preserves history and usage but starts a fresh session", async (provider) => {
   app = await testApp();
   const project = await newProject(app);
