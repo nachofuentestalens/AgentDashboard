@@ -52,8 +52,8 @@ export function CoordinatorPage() {
           <h1 className="text-xl font-semibold">Coordinator</h1>
           <p className="mt-1 text-sm text-ink-400">
             Watches each provider's session and weekly limits and keeps a reserve free for your own use. When usage gets close, queued agent work waits (only
-            important work starts); inside the reserve, running agents pause and resume after the reset. Your own chats are never held. Advise lists the decisions
-            for you to apply; Auto applies them.
+            important work starts); inside the reserve, running agents pause and resume after the reset. Your own chats are never held. Advise lists the
+            decisions for you to apply; Auto applies them.
           </p>
         </div>
         <ErrorNote error={view.error} />
@@ -231,7 +231,7 @@ function ReadingForm({ provider, onSaved }: { provider: Provider; onSaved: (v: C
       <Field label="Used %">
         <input className={`${inputClass} !w-20`} type="number" min={0} max={100} required value={used} onChange={(e) => setUsed(e.target.value)} />
       </Field>
-      <Field label="Resets at">
+      <Field label="Resets at" hint="Empty: a full window from now">
         <input className={`${inputClass} !w-48`} type="datetime-local" value={resets} onChange={(e) => setResets(e.target.value)} />
       </Field>
       <Button type="submit" disabled={save.isPending || used === ""}>

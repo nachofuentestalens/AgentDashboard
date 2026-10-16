@@ -83,8 +83,9 @@ export class Coordinator implements RunCoordinator {
     const previous = readings[key];
     const plan = this.config().plans[input.provider];
     let { usedPercent, resetsAt } = input;
-    // A failed run names no reset: assume the window it hit lasts a full window from now.
-    if (input.source === "error" && !resetsAt)
+    // A failed run, or an owner reading without a reset time: assume a full window from now (the
+    // plan's reset for the week), so the reading expires instead of holding work forever.
+    if (input.source !== "cli" && !resetsAt)
       resetsAt = new Date(input.window === "session" ? now + plan.sessionHours * 3_600_000 : nextWeeklyReset(plan, now)).toISOString();
     // Some reports carry only the reset time; keep the last percentage of the same window.
     if (usedPercent === null && previous && previous.resetsAt === resetsAt) usedPercent = previous.usedPercent;
@@ -136,7 +137,14 @@ export class Coordinator implements RunCoordinator {
     for (const run of this.store.runsWithStatus("queued")) {
       const t = ref(run.taskId);
       if (!t) continue;
-      queued.push({ ...t.ref, provider: this.runner.runProvider(run), runId: run.id, emergency: t.task.emergency, forced: run.forced, work: run.purpose === "work" });
+      queued.push({
+        ...t.ref,
+        provider: this.runner.runProvider(run),
+        runId: run.id,
+        emergency: t.task.emergency,
+        forced: run.forced,
+        work: run.purpose === "work",
+      });
     }
     // A paused task the owner resumed, restarted or deleted is no longer the coordinator's.
     const pausedState = this.paused();

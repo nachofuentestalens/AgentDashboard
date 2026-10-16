@@ -152,7 +152,8 @@ export function providerHolds(states: Map<Provider, ProviderState>, config: Coor
   if (config.mode !== "auto") return holds;
   for (const [provider, s] of states) {
     if (s.level === "conserve") holds.set(provider, { minPriority: config.conservePriority, reason: `Coordinator: ${label(provider)}: ${s.reason}` });
-    else if (s.level === "reserve" || s.level === "exhausted") holds.set(provider, { minPriority: null, reason: `Coordinator: ${label(provider)}: ${s.reason}` });
+    else if (s.level === "reserve" || s.level === "exhausted")
+      holds.set(provider, { minPriority: null, reason: `Coordinator: ${label(provider)}: ${s.reason}` });
   }
   return holds;
 }
@@ -189,10 +190,18 @@ export function decide(input: CoordinatorInput): CoordinatorAction[] {
   const stopped = (p: Provider) => level(p) === "reserve" || level(p) === "exhausted";
   const actions: CoordinatorAction[] = [];
   const act = (type: CoordinatorAction["type"], t: TaskRef, runId: string | null, why: string, to: Provider | null = null) =>
-    actions.push({ key: `${type}:${runId ?? t.taskId}${to ? `:${to}` : ""}`, type, taskId: t.taskId, taskTitle: t.title, runId, provider: t.provider, to, reason: why });
+    actions.push({
+      key: `${type}:${runId ?? t.taskId}${to ? `:${to}` : ""}`,
+      type,
+      taskId: t.taskId,
+      taskTitle: t.title,
+      runId,
+      provider: t.provider,
+      to,
+      reason: why,
+    });
 
-  if (config.pauseRunning)
-    for (const r of input.running) if (stopped(r.provider) && !r.emergency && !r.forced) act("pause", r, r.runId, reason(r.provider));
+  if (config.pauseRunning) for (const r of input.running) if (stopped(r.provider) && !r.emergency && !r.forced) act("pause", r, r.runId, reason(r.provider));
 
   if (config.resumePaused)
     for (const p of input.paused) if (p.resumable && allows(p.provider, p.priority)) act("resume", p, p.runId, `${label(p.provider)} has room again.`);
@@ -215,7 +224,12 @@ export function decide(input: CoordinatorInput): CoordinatorAction[] {
       if (input.queued.some((q) => q.provider === provider)) continue;
       const next = input.backlog.find((t) => t.provider === provider);
       if (next)
-        act("start", next, null, `${round(headroom)}% of the ${label(provider)} session above your reserve resets unused in ${until(s.session.resetsAt, input.now)}.`);
+        act(
+          "start",
+          next,
+          null,
+          `${round(headroom)}% of the ${label(provider)} session above your reserve resets unused in ${until(s.session.resetsAt, input.now)}.`,
+        );
     }
   }
   return actions;
@@ -223,6 +237,6 @@ export function decide(input: CoordinatorInput): CoordinatorAction[] {
 
 // A run that failed on a provider limit tells us that window is spent.
 export function limitWindowFromError(text: string | null): QuotaWindow | null {
-  if (!text || !/usage limit|rate limit|limit reached|hit your limit|out of (extra )?usage|quota exceeded|too many requests/i.test(text)) return null;
+  if (!text || !/usage limit|rate limit|limit reached|hit your (\w+ )?limit|out of (extra )?usage|quota exceeded|too many requests/i.test(text)) return null;
   return /week/i.test(text) ? "weekly" : "session";
 }
