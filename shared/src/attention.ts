@@ -1,4 +1,4 @@
-import type { Inbox } from "./models.ts";
+import type { Inbox, Run } from "./models.ts";
 
 export interface AttentionItem {
   // Stable while the item waits, so the same item is announced once.
@@ -29,6 +29,16 @@ export function attentionItems(inbox: Inbox): AttentionItem[] {
     ...inbox.handoffs.map((h) => ({ key: `handoff:${h.id}`, text: `Task request: "${h.title}" for ${h.toRoleName}`, url: "/inbox" })),
     ...inbox.held.map((h) => ({ key: `held:${h.run.id}`, text: `"${h.task.title}" is held: ${h.run.waitReason ?? "waiting"}`, url: "/inbox" })),
   ];
+}
+
+// A finished agent turn is not an inbox item (a chat just waits for the next message), but the
+// owner still wants to hear about it. Stopped runs were the owner's own doing.
+export function finishedRunAlert(run: Run, title: string): AttentionItem | null {
+  if (run.purpose !== "work") return null;
+  const url = `/tasks/${run.taskId}`;
+  if (run.status === "succeeded") return { key: `finished:${run.id}`, text: `"${title}" finished`, url };
+  if (run.status === "failed") return { key: `finished:${run.id}`, text: `"${title}" failed`, url };
+  return null;
 }
 
 // Items that were not waiting before. The first look (previous null) announces nothing: those

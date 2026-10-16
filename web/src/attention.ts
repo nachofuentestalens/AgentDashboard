@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { attentionItems, newAttention, type Inbox } from "@ad/shared";
+import { useQueryClient } from "@tanstack/react-query";
+import { attentionItems, finishedRunAlert, newAttention, type AttentionItem, type Inbox, type Run, type TaskDetail } from "@ad/shared";
+import { api, keys } from "./api.ts";
+import { RUN_FINISHED } from "./live.ts";
 
 const TITLE = "AgentDashboard";
 const PREF_KEY = "ad.desktopAlerts";
@@ -37,7 +40,28 @@ export function useDesktopAlerts(): { state: AlertState; toggle: () => void } {
 // owner while the dashboard is not the focused window.
 export function useAttention(inbox: Inbox | undefined, alerts: AlertState): void {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const seen = useRef<Set<string> | null>(null);
+  const announcedRuns = useRef(new Set<string>());
+
+  const notify = useCallback(
+    (fresh: AttentionItem[], title: string) => {
+      if (fresh.length === 0 || alerts !== "on" || document.hasFocus()) return;
+      const first = fresh[0]!;
+      const notification = new Notification(title, {
+        body: fresh.length === 1 ? first.text : `${first.text}, and ${fresh.length - 1} more`,
+        icon: "/favicon.svg",
+        // One alert at a time: a newer one replaces the last instead of piling up.
+        tag: "agentdashboard-attention",
+      });
+      notification.onclick = () => {
+        window.focus();
+        void navigate(fresh.length === 1 ? first.url : "/inbox");
+        notification.close();
+      };
+    },
+    [alerts, navigate],
+  );
 
   useEffect(() => {
     document.title = inbox?.count ? `(${inbox.count}) ${TITLE}` : TITLE;
@@ -48,18 +72,26 @@ export function useAttention(inbox: Inbox | undefined, alerts: AlertState): void
     const items = attentionItems(inbox);
     const fresh = newAttention(seen.current, items);
     seen.current = new Set(items.map((i) => i.key));
-    if (fresh.length === 0 || alerts !== "on" || document.hasFocus()) return;
-    const first = fresh[0]!;
-    const notification = new Notification(`${TITLE} needs you`, {
-      body: fresh.length === 1 ? first.text : `${first.text}, and ${fresh.length - 1} more`,
-      icon: "/favicon.svg",
-      // One alert at a time: a newer one replaces the last instead of piling up.
-      tag: "agentdashboard-attention",
-    });
-    notification.onclick = () => {
-      window.focus();
-      void navigate(fresh.length === 1 ? first.url : "/inbox");
-      notification.close();
+    notify(fresh, `${TITLE} needs you`);
+  }, [inbox, notify]);
+
+  useEffect(() => {
+    const onFinished = (event: Event) => {
+      const run = (event as CustomEvent<Run>).detail;
+      // The same finished run can be pushed more than once.
+      if (announcedRuns.current.has(run.id)) return;
+      const title = qc.getQueryData<TaskDetail>(keys.task(run.taskId))?.task.title;
+      void (title ? Promise.resolve(title) : api.task(run.taskId).then((d) => d.task.title)).then(
+        (t) => {
+          const item = finishedRunAlert(run, t);
+          if (!item || announcedRuns.current.has(run.id)) return;
+          announcedRuns.current.add(run.id);
+          notify([item], TITLE);
+        },
+        () => undefined,
+      );
     };
-  }, [inbox, alerts, navigate]);
+    window.addEventListener(RUN_FINISHED, onFinished);
+    return () => window.removeEventListener(RUN_FINISHED, onFinished);
+  }, [qc, notify]);
 }
