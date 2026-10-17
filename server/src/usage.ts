@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Provider, QuotaReading } from "@ad/shared";
+import { codexRateLimits, type Provider, type QuotaReading } from "@ad/shared";
 
-export type UsageReading = Pick<QuotaReading, "window" | "usedPercent" | "resetsAt">;
+// `observedAt`: when the source saw these numbers, for sources that can be older than a later reading.
+export type UsageReading = Pick<QuotaReading, "window" | "usedPercent" | "resetsAt"> & { observedAt?: string };
 // Reads a provider's current limits. Throws with a message for the owner when it cannot.
 export type UsageFetcher = (provider: Provider) => Promise<UsageReading[] | null>;
 
@@ -59,7 +60,83 @@ async function fetchClaudeUsage(fetchImpl: typeof fetch): Promise<UsageReading[]
   return readings;
 }
 
-// Codex limits arrive with its runs' token counts (shared/src/parser.ts), so it has no fetcher.
+function codexSessionsDir(): string {
+  return path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "sessions");
+}
+
+// A rollout line's `token_count` limits, or null. Other limit ids (per-model pools) are not the plan's windows.
+export function parseCodexRolloutLine(line: string): UsageReading[] | null {
+  if (!line.includes('"rate_limits"')) return null;
+  let data: unknown;
+  try {
+    data = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!isObject(data)) return null;
+  const payload = isObject(data.payload) ? data.payload : data;
+  const limits = payload.rate_limits;
+  if (!isObject(limits) || (typeof limits.limit_id === "string" && limits.limit_id !== "codex")) return null;
+  const at = typeof data.timestamp === "string" ? Date.parse(data.timestamp) : NaN;
+  // Older CLIs give `resets_in_seconds`, relative to when the line was written.
+  const events = codexRateLimits(payload, Number.isNaN(at) ? Date.now() : at);
+  const readings = events.flatMap((e) => (e.kind === "rate_limit" ? [{ window: e.window, usedPercent: e.usedPercent, resetsAt: e.resetsAt }] : []));
+  if (!readings.length) return null;
+  const observedAt = Number.isNaN(at) ? undefined : new Date(at).toISOString();
+  return readings.map((r) => ({ ...r, observedAt }));
+}
+
+// The newest rollout files, from the latest YYYY/MM/DD folders.
+function recentRollouts(root: string, limit: number): string[] {
+  const dirsDesc = (dir: string) =>
+    fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && /^\d+$/.test(d.name))
+      .map((d) => d.name)
+      .sort((a, b) => Number(b) - Number(a));
+  const files: string[] = [];
+  outer: for (const y of dirsDesc(root))
+    for (const m of dirsDesc(path.join(root, y)))
+      for (const d of dirsDesc(path.join(root, y, m))) {
+        const dir = path.join(root, y, m, d);
+        for (const f of fs.readdirSync(dir)) if (f.startsWith("rollout-") && f.endsWith(".jsonl")) files.push(path.join(dir, f));
+        if (files.length >= limit) break outer;
+      }
+  return files
+    .map((f) => ({ f, t: fs.statSync(f).mtimeMs }))
+    .sort((a, b) => b.t - a.t)
+    .slice(0, limit)
+    .map((x) => x.f);
+}
+
+// The last `bytes` of a file: rollouts grow to megabytes, and the latest limits are near the end.
+function readTail(file: string, bytes: number): string {
+  const fd = fs.openSync(file, "r");
+  try {
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - bytes);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    return buf.toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// `codex exec --json` does not print its limits, but every Codex session (the dashboard's and the
+// owner's own) writes them to its rollout file with each token count. The newest one is the reading.
+export function readCodexUsage(root = codexSessionsDir()): UsageReading[] {
+  if (!fs.existsSync(root)) throw new Error("No Codex sessions found. Run `codex` once to read its usage.");
+  for (const file of recentRollouts(root, 20)) {
+    const lines = readTail(file, 512 * 1024).split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const readings = parseCodexRolloutLine(lines[i]!);
+      if (readings) return readings;
+    }
+  }
+  throw new Error("No recent Codex session reported its limits yet.");
+}
+
 export function providerUsageFetcher(fetchImpl: typeof fetch = fetch): UsageFetcher {
-  return async (provider) => (provider === "claude" ? fetchClaudeUsage(fetchImpl) : null);
+  return async (provider) => (provider === "claude" ? fetchClaudeUsage(fetchImpl) : readCodexUsage());
 }

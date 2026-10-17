@@ -95,7 +95,12 @@ export class Coordinator implements RunCoordinator {
         try {
           const readings = await fetcher(provider);
           if (!readings) continue;
-          for (const r of readings) this.observe({ provider, ...r, rejected: r.usedPercent !== null && r.usedPercent >= 100, source: "api" });
+          for (const { observedAt, ...r } of readings) {
+            // A file-based source repeats its last numbers; a later reading (an owner's, a run's) wins.
+            const previous = this.readings()[`${provider}:${r.window}`];
+            if (observedAt && previous && Date.parse(previous.at) >= Date.parse(observedAt)) continue;
+            this.observe({ provider, ...r, rejected: r.usedPercent !== null && r.usedPercent >= 100, source: "api" });
+          }
         } catch (e) {
           error = (e as Error).message || "Usage request failed.";
         }
