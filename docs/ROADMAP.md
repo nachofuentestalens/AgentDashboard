@@ -59,7 +59,7 @@ Demo checklist (real Claude Code, on Windows):
 
 - [x] Explicit task dependencies, committed-input and prerequisite-ancestry guards, owner approval gating, prerequisite editor and agent handoff fields; [details](DEPENDENCIES.md)
 - [x] Owner-approved managed baseline, task integration previews, successor worktree refresh and milestone plan import; [details](DEPENDENCIES.md#managed-baseline-and-delivery)
-- [ ] Apply the [Banner & Bounty recovery](BANNER_BOUNTY_RECOVERY.md) on the live project
+- [x] Apply the [Banner & Bounty recovery](BANNER_BOUNTY_RECOVERY.md) on the live project
 
 - [x] Task stages (backlog → in progress → needs review → approved → closed), `step`/`review` blocks, review runs, grouped board with "Next up": design in [docs/TASK_STATES.md](TASK_STATES.md)
   - [x] Rollout 1: stage model, migration, owner actions endpoint, stage pill and stage actions on the task page
