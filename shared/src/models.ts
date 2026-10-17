@@ -374,8 +374,8 @@ export interface Settings {
 }
 
 export const DEFAULT_MAX_CONCURRENT_RUNS = 1;
-export const DEFAULT_TASK_TOKEN_BUDGET = 1_000_000;
-export const DEFAULT_TASK_TOOL_BUDGET = 80;
+export const DEFAULT_TASK_TOKEN_BUDGET: number | null = null;
+export const DEFAULT_TASK_TOOL_BUDGET: number | null = null;
 
 // ---- studio: departments, roles and the agents staffing them
 

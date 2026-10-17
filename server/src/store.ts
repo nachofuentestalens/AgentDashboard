@@ -55,7 +55,7 @@ const optProvider = (v: unknown): Provider | null => (isProvider(v) ? v : null);
 const str = (v: unknown): string | null => (v as string | null) ?? null;
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
 // Unset: the built-in default. An empty string: cleared, meaning unlimited.
-const allowance = (v: string | undefined, fallback: number): number | null => (v === undefined ? fallback : v === "" ? null : Number(v));
+const allowance = (v: string | undefined, fallback: number | null): number | null => (v === undefined ? fallback : v === "" ? null : Number(v));
 
 function parseJson<T>(text: unknown, fallback: T): T {
   try {
