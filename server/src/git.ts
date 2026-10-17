@@ -2,12 +2,12 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-export function git(cwd: string, args: string[], stdin?: string): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+export function git(cwd: string, args: string[], stdin?: string, env: NodeJS.ProcessEnv = {}): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = execFile(
       "git",
       args,
-      { cwd, timeout: 30_000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never" } },
+      { cwd, timeout: 30_000, windowsHide: true, env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never" } },
       (error, stdout, stderr) => {
         resolve({ ok: !error, stdout: stdout.trim(), stderr: (stderr || (error?.message ?? "")).trim() });
       },

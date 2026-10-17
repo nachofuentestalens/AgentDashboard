@@ -25,6 +25,7 @@ import { checkRepo, initRepo } from "./git.ts";
 import { HttpError, parse } from "./http.ts";
 import { Runner } from "./runner.ts";
 import { Store } from "./store.ts";
+import { registerDeliveryRoutes } from "./delivery-routes.ts";
 import { baselineBlocker } from "./readiness.ts";
 import { Studio } from "./studio.ts";
 import { registerStudioRoutes } from "./studio-routes.ts";
@@ -139,6 +140,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   app.get<{ Params: { id: string } }>("/api/projects/:id", async (request, reply) => store.getProject(request.params.id) ?? notFound(reply, "Project"));
 
   app.patch<{ Params: { id: string } }>("/api/projects/:id", async (request, reply) => {
+    if (runner.isProjectBusy(request.params.id)) return reply.code(409).send({ error: "Wait for the project's delivery operation." });
     const body = parse(updateProjectBody, request.body, reply);
     if (!body) return;
     if (!store.getProject(request.params.id)) return notFound(reply, "Project");
@@ -155,6 +157,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   });
 
   app.delete<{ Params: { id: string } }>("/api/projects/:id", async (request, reply) => {
+    if (runner.isProjectBusy(request.params.id)) return reply.code(409).send({ error: "Wait for the project's delivery operation." });
     const tasks = store.listTasks(request.params.id);
     if (tasks.some((t) => runner.isTaskRunning(t.id))) return reply.code(409).send({ error: "Stop the running agents in this project first." });
     if (!store.deleteProject(request.params.id)) return notFound(reply, "Project");
@@ -197,7 +200,12 @@ export async function buildApp(options: AppOptions): Promise<App> {
     const task = store.getTask(request.params.id);
     if (!task) return notFound(reply, "Task");
     const detail: TaskDetail = {
-      readiness: await baselineBlocker(store, task, store.getWorkspace(task.id)?.path ?? store.getProject(task.projectId)!.repoPath),
+      readiness: await baselineBlocker(
+        store,
+        task,
+        store.getWorkspace(task.id)?.path ?? store.getProject(task.projectId)!.repoPath,
+        store.getWorkspace(task.id) ? "HEAD" : (store.projectBaseline(task.projectId)?.commit ?? "HEAD"),
+      ),
       task,
       messages: store.listMessages(task.id),
       runs: store.listRuns(task.id),
@@ -215,6 +223,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
     if (!body) return;
     const current = store.getTask(request.params.id);
     if (!current) return notFound(reply, "Task");
+    if (runner.isProjectBusy(current.projectId)) return reply.code(409).send({ error: "Wait for the project's delivery operation." });
     if (
       (current.status === "running" || current.status === "queued") &&
       (body.tokenBudget !== undefined || body.toolBudget !== undefined || body.autoCompact !== undefined)
@@ -269,6 +278,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   app.delete<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
     const task = store.getTask(request.params.id);
     if (!task) return notFound(reply, "Task");
+    if (runner.isProjectBusy(task.projectId)) return reply.code(409).send({ error: "Wait for the project's delivery operation." });
     if (runner.isTaskRunning(task.id)) return reply.code(409).send({ error: "Stop the agent before deleting this task." });
     const runs = store.listRuns(task.id);
     store.deleteTask(task.id);
@@ -324,6 +334,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   });
 
   registerStudioRoutes(app, { store, bus, runner, studio });
+  registerDeliveryRoutes(app, store, runner, options.dataDir);
   registerCoordinatorRoutes(app, coordinator);
 
   // ---- live updates

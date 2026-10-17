@@ -5,6 +5,8 @@ import type { TaskStage } from "@ad/shared";
 // the current stage and an event, tested as a table, so runner.ts and the routes never set stage
 // directly (CLAUDE.md: workflow state changes happen on the server, not ad hoc at each call site).
 export type StageEvent =
+  | "recover_review" // owner imports existing completed outputs for a fresh review
+  | "recover_backlog" // owner imports a paused, unfinished task plan
   | "start" // a work run begins: backlog, needs_review or changes_requested → in_progress
   | "run_succeeded" // a work run finished a step without a question
   | "continue" // owner asks for the next step from needs_review
@@ -29,6 +31,12 @@ const refuse = (stage: TaskStage, error: string): StageResult => ({ stage, error
 
 export function nextStage(stage: TaskStage, event: StageEvent): StageResult {
   switch (event) {
+    case "recover_review":
+      if (stage === "closed" || stage === "approved") return ok("needs_review");
+      return refuse(stage, "Only previously accepted or closed work can be recovered for review.");
+    case "recover_backlog":
+      if (stage !== "in_review") return ok("backlog");
+      return refuse(stage, "Wait for the current review to finish before importing a plan.");
     case "start":
       if (stage === "backlog" || stage === "needs_review" || stage === "changes_requested" || stage === "in_progress") return ok("in_progress");
       return refuse(stage, `Cannot start work from ${stage}.`);
