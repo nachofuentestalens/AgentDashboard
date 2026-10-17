@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createCodexParser, DEFAULT_COORDINATOR_CONFIG, parseClaudeLine, type CoordinatorConfig, type CoordinatorView, type QuotaReading } from "@ad/shared";
 import type { App } from "../src/app.ts";
@@ -13,7 +16,7 @@ import {
   type ProviderState,
 } from "../src/coordinator.ts";
 import { plan, type QueuedRun, type SchedulerState } from "../src/scheduler.ts";
-import { parseClaudeUsage } from "../src/usage.ts";
+import { parseClaudeUsage, readCodexUsage } from "../src/usage.ts";
 import { api, newProject, newTask, runFinished, testApp } from "./helpers.ts";
 
 const HOUR = 3_600_000;
@@ -339,5 +342,35 @@ describe("usage API", () => {
       { window: "weekly", usedPercent: 35, resetsAt: null },
     ]);
     expect(parseClaudeUsage({ error: "nope" })).toEqual([]);
+  });
+
+  it("reads Codex limits from its newest session rollout", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-sessions-"));
+    try {
+      const line = (ts: string, limits: unknown) =>
+        JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "token_count", info: null, rate_limits: limits } });
+      const dir = path.join(root, "2026", "10", "17");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "rollout-a.jsonl"),
+        [
+          line("2026-10-17T10:00:00Z", {
+            limit_id: "codex",
+            primary: { used_percent: 83, window_minutes: 300, resets_at: 1792200777 },
+            secondary: { used_percent: 13, window_minutes: 10080, resets_in_seconds: 3600 },
+          }),
+          line("2026-10-17T10:01:00Z", { limit_id: "other_model", primary: { used_percent: 1, window_minutes: 300 } }),
+          line("2026-10-17T10:02:00Z", null),
+          "",
+        ].join("\n"),
+      );
+      expect(readCodexUsage(root)).toEqual([
+        { window: "session", usedPercent: 83, resetsAt: new Date(1792200777 * 1000).toISOString(), observedAt: "2026-10-17T10:00:00.000Z" },
+        { window: "weekly", usedPercent: 13, resetsAt: "2026-10-17T11:00:00.000Z", observedAt: "2026-10-17T10:00:00.000Z" },
+      ]);
+      expect(() => readCodexUsage(path.join(root, "missing"))).toThrow(/No Codex sessions/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
