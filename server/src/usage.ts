@@ -47,8 +47,7 @@ async function fetchClaudeUsage(fetchImpl: typeof fetch): Promise<UsageReading[]
   }
   const token = typeof oauth?.accessToken === "string" ? oauth.accessToken : "";
   if (!token) throw new Error("No Claude sign-in found. Run `claude` and log in with your subscription to read usage.");
-  if (typeof oauth?.expiresAt === "number" && oauth.expiresAt <= Date.now())
-    throw new Error("The Claude sign-in has expired; the next Claude run renews it.");
+  if (typeof oauth?.expiresAt === "number" && oauth.expiresAt <= Date.now()) throw new Error("The Claude sign-in has expired; the next Claude run renews it.");
   const res = await fetchImpl(CLAUDE_USAGE_URL, {
     headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20", Accept: "application/json" },
     signal: AbortSignal.timeout(10_000),
