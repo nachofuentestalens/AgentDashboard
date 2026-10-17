@@ -5,13 +5,15 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a pull request supersedes its running checks; runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  validate:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  # Formatting and types do not depend on the OS, so they run once.
+  checks:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,11 +24,37 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
+
+  # Unit and e2e suites run as parallel jobs: the wall time is the slowest suite, not their sum.
+  test:
+    name: ${{ matrix.suite }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        suite: [unit, e2e]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Real-time scanning of node_modules and spawned agent processes is the main slowdown on Windows runners.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - if: matrix.suite == 'unit'
+        run: pnpm test
+      # Runner images ship Google Chrome, so skip downloading Playwright's Chromium and its system packages.
+      - if: matrix.suite == 'e2e'
+        run: pnpm test:e2e
+        env:
+          PW_CHROMIUM: ${{ runner.os == 'Windows' && 'C:\Program Files\Google\Chrome\Application\chrome.exe' || '/usr/bin/google-chrome' }}
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && matrix.suite == 'e2e'
         with:
           name: e2e-${{ matrix.os }}
           path: test-results/
