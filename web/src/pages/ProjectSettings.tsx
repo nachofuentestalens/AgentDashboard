@@ -19,6 +19,7 @@ export function ProjectSettings({ project }: { project: Project }) {
   const [autoReview, setAutoReview] = useState(project.autoReview);
   const [autoContinue, setAutoContinue] = useState(project.autoContinueSteps);
   const [startNext, setStartNext] = useState(project.startNextWhenIdle);
+  const [autoApprove, setAutoApprove] = useState(project.autoApprove);
 
   const save = useMutation({
     mutationFn: () =>
@@ -35,6 +36,7 @@ export function ProjectSettings({ project }: { project: Project }) {
         autoReview,
         autoContinueSteps: autoContinue,
         startNextWhenIdle: startNext,
+        autoApprove,
       }),
     onSuccess: (p) => qc.setQueryData(keys.project(p.id), p),
   });
@@ -110,7 +112,9 @@ export function ProjectSettings({ project }: { project: Project }) {
       </Field>
       <fieldset className="space-y-3 rounded-xl border border-ink-800 p-4">
         <legend className="px-1 text-sm font-semibold text-ink-200">Task automation</legend>
-        <p className="text-xs text-ink-400">For role tasks. You still approve and close every task yourself.</p>
+        <p className="text-xs text-ink-400">
+          For role tasks. Unless hands-off delivery is on, you still approve and close every task yourself. Messages you send a task count as a new step.
+        </p>
         <Toggle checked={autoReview} onChange={setAutoReview} label="Ask for an agent review when a step finishes" />
         <Field label="Continue after a passed review" hint="How many steps in a row an agent may continue on its own before you step in. 0 turns it off.">
           <input
@@ -124,6 +128,11 @@ export function ProjectSettings({ project }: { project: Project }) {
           />
         </Field>
         <Toggle checked={startNext} onChange={setStartNext} label="Start a role's next backlog task when it has nothing to do" />
+        <Toggle
+          checked={autoApprove}
+          onChange={setAutoApprove}
+          label="Hands-off delivery: approve and integrate a task when its agent review passes, and send review findings back to the author (up to 3 times in a row)"
+        />
       </fieldset>
       <ErrorNote error={save.error} />
       <div className="flex items-center gap-3">

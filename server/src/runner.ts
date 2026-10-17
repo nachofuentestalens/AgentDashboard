@@ -83,6 +83,8 @@ const providerName = (p: Provider) => PROVIDERS.find((x) => x.id === p)!.label;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Budgets use a sliding 24-hour window, so a held run may become startable just by waiting.
 const RECHECK_MS = 60_000;
+// Hands-off delivery sends review findings back this many times in a row before the owner decides.
+const AUTO_FIX_ROUNDS = 3;
 
 // Starts agent processes (Claude Code or Codex) for tasks, records what they stream and settles each run's outcome.
 // A plain chat runs at once. A role's task is queued, and the scheduler starts it when one of the
@@ -97,12 +99,17 @@ export class Runner {
   private readonly github: Github;
   private readonly workspaceBusy = new Set<string>();
   private readonly deliveryBusy = new Set<string>();
+  // Projects with a reviewed task waiting for hands-off delivery: their queued work holds until it lands.
+  private readonly deliveryPending = new Set<string>();
+  // taskId:checkpoint pairs whose automatic delivery failed; the owner takes over until the checkpoint changes.
+  private readonly deliveryFailed = new Set<string>();
   private tickPending = false;
   private tickAgain = false;
   private closed = false;
   private readonly recheck: NodeJS.Timeout;
   replies: ReplyHandler | null = null;
   coordinator: RunCoordinator | null = null;
+  deliver: ((projectId: string, taskId: string) => Promise<void>) | null = null;
 
   constructor(
     private readonly store: Store,
@@ -456,6 +463,8 @@ export class Runner {
     setImmediate(async () => {
       try {
         if (this.closed) return;
+        await this.deliverReviewed();
+        if (this.closed) return;
         this.startIdleBacklog();
         let holds = new Map<Provider, ProviderHold>();
         try {
@@ -488,6 +497,50 @@ export class Runner {
     return task ? this.choice(this.actorTask(task, run)).provider : run.provider;
   }
 
+  // Hands-off delivery: a task whose agent review passed on its current checkpoint is approved and
+  // integrated as the owner would, once no agent runs in its project (the baseline must hold still).
+  // Queued work in that project waits so the moment comes; a failure hands the task to the owner.
+  private async deliverReviewed(): Promise<void> {
+    this.deliveryPending.clear();
+    for (const project of this.store.listProjects()) {
+      if (!project.autoApprove || !this.deliver || this.isProjectBusy(project.id) || this.store.deliveryPaused(project.id)) continue;
+      const tasks = this.store.listTasks(project.id);
+      const key = (task: Task) => `${task.id}:${this.store.getWorkspace(task.id)?.checkpointCommit ?? ""}`;
+      const ready = tasks.filter(
+        (t) =>
+          t.roleId &&
+          t.stage === "needs_review" &&
+          t.status === "idle" &&
+          !(t.stepState === "done" && t.nextStep) &&
+          !this.deliveryFailed.has(key(t)) &&
+          this.passedOnCheckpoint(t),
+      );
+      if (ready.length === 0) continue;
+      this.deliveryPending.add(project.id);
+      if (tasks.some((t) => this.isTaskRunning(t.id))) continue;
+      for (const task of ready) {
+        try {
+          await this.deliver(project.id, task.id);
+          this.note(task.id, "info", "Approved and integrated automatically after the passed agent review (project setting).");
+        } catch (error) {
+          this.deliveryFailed.add(key(task));
+          this.note(task.id, "warn", `Automatic approval stopped: ${(error as Error).message} Approve or integrate this task yourself.`);
+        }
+        if (this.closed) return;
+      }
+      this.deliveryPending.delete(project.id);
+    }
+  }
+
+  // A notice after the fact goes on the task's latest finished run, so it shows in the transcript.
+  private note(taskId: string, level: "info" | "warn", text: string): void {
+    const run = this.store.listRuns(taskId).at(-1);
+    if (!run || this.active.has(run.id)) return;
+    const stamped: StampedEvent = { seq: (this.readEvents(run.id).at(-1)?.seq ?? -1) + 1, at: new Date().toISOString(), event: { kind: "notice", level, text } };
+    fs.appendFileSync(this.eventsFile(run.id), JSON.stringify(stamped) + "\n");
+    this.bus.publish({ type: "run_event", runId: run.id, taskId, stamped });
+  }
+
   // Projects that opt in: a staffed role with nothing queued or running starts its top backlog
   // task, as the owner's Start would.
   private startIdleBacklog(): void {
@@ -501,7 +554,7 @@ export class Runner {
         .map((a) => a.roleId),
     );
     for (const project of projects) {
-      if (this.isProjectBusy(project.id) || this.store.deliveryPaused(project.id)) continue;
+      if (this.isProjectBusy(project.id) || this.deliveryPending.has(project.id) || this.store.deliveryPaused(project.id)) continue;
       for (const task of this.store.backlogTasks(project.id)) {
         if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId) || this.store.dependencyBlocker(task)) continue;
         busy.add(task.roleId);
@@ -653,20 +706,39 @@ export class Runner {
         record({ kind: "notice", level: "warn", text: "The review ended without a valid review block. The step goes back to you unreviewed." });
       return this.stagePatch(task.roleId, task.stage, "review_cancel");
     }
-    this.store.addTaskReview({ taskId: task.id, runId: run.id, reviewer: run.roleId ?? "agent", verdict: verdict.verdict, findings: verdict.findings });
+    // Review runs are read-only, so the checkpoint now is the one the reviewer read.
+    const commit = this.store.getWorkspace(task.id)?.checkpointCommit ?? null;
+    this.store.addTaskReview({ taskId: task.id, runId: run.id, reviewer: run.roleId ?? "agent", verdict: verdict.verdict, findings: verdict.findings, commit });
     const count = `${verdict.findings.length} finding${verdict.findings.length === 1 ? "" : "s"}`;
     record({ kind: "notice", level: "info", text: `Agent review: ${verdict.verdict === "pass" ? "passed" : "changes requested"} (${count}).` });
     return this.stagePatch(task.roleId, task.stage, verdict.verdict === "pass" ? "review_pass" : "review_changes");
   }
 
-  // The project's opt-in automation after a step or a review ends. It never approves: at most it
-  // asks for a review, or continues after a passed one up to the project's step limit.
+  // The latest review is an agent's pass on exactly the task's current checkpoint.
+  private passedOnCheckpoint(task: Task): boolean {
+    const last = this.store.listTaskReviews(task.id).at(-1);
+    const checkpoint = this.store.getWorkspace(task.id)?.checkpointCommit ?? null;
+    return !!last?.runId && last.verdict === "pass" && (last.commit ?? null) === checkpoint;
+  }
+
+  // The project's opt-in automation after a step or a review ends: ask for a review, continue after
+  // a passed one up to the project's step limit, or (hands-off delivery) send the findings back to
+  // the author. Approval itself happens in deliverReviewed.
   // ended: the work run that finished a step, or the review run that gave a verdict.
   private automate(taskId: string, ended: Run, record: (event: AgentEvent) => void): void {
     const task = this.store.getTask(taskId);
     const project = task ? this.store.getProject(task.projectId) : null;
-    if (!task || !project || task.stage !== "needs_review" || task.status !== "idle") return;
+    if (!task || !project || task.status !== "idle") return;
     try {
+      if (ended.purpose === "review" && task.stage === "changes_requested") {
+        const review = this.store.listTaskReviews(task.id).at(-1);
+        if (!project.autoApprove || review?.runId !== ended.id || task.autoContinues >= AUTO_FIX_ROUNDS) return;
+        this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
+        record({ kind: "notice", level: "info", text: `Sending the findings back to the author automatically (${task.autoContinues + 1} of ${AUTO_FIX_ROUNDS}).` });
+        this.send(task.id, ["Address these review findings:", ...review.findings.map((f) => `- ${f}`)].join("\n"), true);
+        return;
+      }
+      if (task.stage !== "needs_review") return;
       if (ended.purpose === "review") {
         const passed = this.store.listTaskReviews(task.id).at(-1);
         if (passed?.runId !== ended.id || passed.verdict !== "pass") return;
@@ -679,6 +751,11 @@ export class Runner {
         });
         this.send(task.id, `Continue with: ${task.nextStep}`, true);
       } else if (project.autoReview) {
+        // A reply that changed no files (a status question, say) keeps the earlier passed review.
+        if (this.store.getWorkspace(task.id) && this.passedOnCheckpoint(task)) {
+          record({ kind: "notice", level: "info", text: "No changes since the passed agent review, so it is not reviewed again." });
+          return;
+        }
         record({ kind: "notice", level: "info", text: "Asking for an agent review automatically (project setting)." });
         this.startReview(task.id).catch((error: Error) => record({ kind: "notice", level: "warn", text: `Automatic review did not start: ${error.message}` }));
       }
@@ -721,6 +798,10 @@ export class Runner {
       if (task && project && run.purpose === "work") {
         if (this.isProjectBusy(project.id)) {
           readiness.set(run.id, "Baseline: a delivery operation is running.");
+          continue;
+        }
+        if (this.deliveryPending.has(project.id)) {
+          readiness.set(run.id, "Baseline: waiting for running agents to finish so a reviewed task can be approved and integrated.");
           continue;
         }
         if (this.store.deliveryPaused(project.id)) {
@@ -778,7 +859,7 @@ export class Runner {
         if (task) this.publishTask(this.store.updateTask(task.id, { status: "idle", ...this.reviewCancelled(run) }));
         continue;
       }
-      if (this.isProjectBusy(task.projectId)) continue;
+      if (this.isProjectBusy(task.projectId) || this.deliveryPending.has(task.projectId)) continue;
       // New arrivals during asynchronous Git checks wait for the next pass.
       if (run.purpose === "work" && !readiness.has(run.id)) continue;
       const { effort, provider } = this.choice(this.actorTask(task, run));

@@ -144,6 +144,17 @@ export class Delivery {
     });
   }
 
+  // Hands-off delivery: the integration preview and its approval the owner would otherwise do by hand.
+  // Without a managed baseline or a task worktree there is nothing to integrate, so it only approves.
+  async autoApprove(projectId: string, taskId: string): Promise<void> {
+    if (!this.store.projectBaseline(projectId) || !this.store.getWorkspace(taskId)) {
+      this.runner.stageAction(taskId, { action: "approve" });
+      return;
+    }
+    const preview = await this.integrate(projectId, taskId);
+    await this.approve(projectId, preview.id);
+  }
+
   approve(projectId: string, previewId: string) {
     return this.runner.deliveryOperation(projectId, async () => {
       const project = this.project(projectId);

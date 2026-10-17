@@ -98,6 +98,7 @@ const toProject = (r: Row): Project => ({
   autoReview: r.auto_review === 1,
   autoContinueSteps: Number(r.auto_continue_steps ?? 0),
   startNextWhenIdle: r.start_next_when_idle === 1,
+  autoApprove: r.auto_approve === 1,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
 });
@@ -447,7 +448,16 @@ export class Store {
     patch: Partial<
       Pick<
         Project,
-        "name" | "repoPath" | "defaultProvider" | "defaultModel" | "defaultEffort" | "allowedTools" | "autoReview" | "autoContinueSteps" | "startNextWhenIdle"
+        | "name"
+        | "repoPath"
+        | "defaultProvider"
+        | "defaultModel"
+        | "defaultEffort"
+        | "allowedTools"
+        | "autoReview"
+        | "autoContinueSteps"
+        | "startNextWhenIdle"
+        | "autoApprove"
       >
     >,
   ): Project | null {
@@ -457,7 +467,7 @@ export class Store {
     this.db
       .prepare(
         `UPDATE projects SET name = ?, repo_path = ?, default_provider = ?, default_model = ?, default_effort = ?, allowed_tools = ?, auto_review = ?,
-           auto_continue_steps = ?, start_next_when_idle = ?, updated_at = ? WHERE id = ?`,
+           auto_continue_steps = ?, start_next_when_idle = ?, auto_approve = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.name,
@@ -469,6 +479,7 @@ export class Store {
         next.autoReview ? 1 : 0,
         next.autoContinueSteps,
         next.startNextWhenIdle ? 1 : 0,
+        next.autoApprove ? 1 : 0,
         now(),
         id,
       );
@@ -744,10 +755,10 @@ export class Store {
   }
 
   addTaskReview(input: Omit<TaskReview, "id" | "createdAt">): TaskReview {
-    const review: TaskReview = { ...input, id: randomUUID(), createdAt: now() };
+    const review: TaskReview = { ...input, commit: input.commit ?? null, id: randomUUID(), createdAt: now() };
     this.db
-      .prepare("INSERT INTO task_reviews (id, task_id, run_id, reviewer, verdict, findings, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(review.id, review.taskId, review.runId, review.reviewer, review.verdict, JSON.stringify(review.findings), review.createdAt);
+      .prepare("INSERT INTO task_reviews (id, task_id, run_id, reviewer, verdict, findings, reviewed_commit, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(review.id, review.taskId, review.runId, review.reviewer, review.verdict, JSON.stringify(review.findings), review.commit ?? null, review.createdAt);
     return review;
   }
 
@@ -760,6 +771,7 @@ export class Store {
       reviewer: r.reviewer as string,
       verdict: r.verdict as TaskReview["verdict"],
       findings: parseJson<string[]>(r.findings, []),
+      commit: str(r.reviewed_commit),
       createdAt: r.created_at as string,
     }));
   }

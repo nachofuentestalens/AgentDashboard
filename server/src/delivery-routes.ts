@@ -11,6 +11,7 @@ import type { Runner } from "./runner.ts";
 export function registerDeliveryRoutes(app: FastifyInstance, store: Store, runner: Runner, dataDir: string) {
   const delivery = new Delivery(store, runner, path.join(dataDir, "delivery"));
   const plan = new DeliveryPlan(store, runner);
+  runner.deliver = (projectId, taskId) => delivery.autoApprove(projectId, taskId);
   app.post<{ Params: { id: string } }>("/api/projects/:id/delivery/plan", (request) => plan.preview(request.params.id));
   app.post<{ Params: { id: string } }>("/api/projects/:id/delivery/plan/approve", (request, reply) => {
     const body = parse(z.object({ previewId: z.string().uuid() }), request.body, reply);

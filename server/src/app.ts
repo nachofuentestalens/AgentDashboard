@@ -151,8 +151,8 @@ export async function buildApp(options: AppOptions): Promise<App> {
     }
     const project = store.updateProject(request.params.id, body);
     projectsChanged();
-    // Turning on "start next when idle" may start backlog work right away.
-    if (body.startNextWhenIdle) runner.tick();
+    // Turning on "start next when idle" or hands-off delivery may start or approve work right away.
+    if (body.startNextWhenIdle || body.autoApprove) runner.tick();
     return project;
   });
 

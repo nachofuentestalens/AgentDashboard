@@ -97,6 +97,22 @@ describe("managed project delivery", () => {
     expect(fs.existsSync(path.join(repo, "contract.md"))).toBe(false);
   });
 
+  it("integrates a task whose agent review passed and releases its successor under hands-off delivery", async () => {
+    const { repo, projectId, programmer, qa, snapshot } = await setup();
+    await snapshot();
+    const liveHead = git(repo, "rev-parse", "HEAD");
+    const first = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass]" });
+    await stepFinished(app, first.id);
+    const next = await newTask(app, projectId, { roleId: qa, dependencyIds: [first.id] });
+    await api(app, "PATCH", `/api/projects/${projectId}`, { startNextWhenIdle: true, autoApprove: true });
+    // The review was asked for by hand here; its pass is what hands-off delivery acts on.
+    await api(app, "POST", `/api/tasks/${first.id}/actions`, { action: "review" });
+    await waitFor(() => app.store.getTask(first.id)!.stage === "approved", 15_000);
+    expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:agent-work.txt`)).toBe("Unfinished agent work");
+    expect(git(repo, "rev-parse", "HEAD")).toBe(liveHead);
+    await waitFor(() => app.store.listRuns(next.id).length > 0, 15_000);
+  });
+
   it("refuses stale approval and leaves conflicting worktrees untouched", async () => {
     const { repo, projectId, programmer, workspaces, endpoint, snapshot, approveTask } = await setup();
     await snapshot();
