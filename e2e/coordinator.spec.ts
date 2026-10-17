@@ -11,6 +11,20 @@ test("enter a usage reading and see the coordinator keep the reserve", async ({ 
   await expect(codex.getByText("Reserve only")).toBeVisible();
   await expect(codex.getByText(/Session usage 90% reached the 20% reserve kept for you/)).toBeVisible();
   await expect(codex.getByRole("meter", { name: "Session usage" })).toHaveAttribute("aria-valuenow", "90");
+  const usage = page.getByRole("region", { name: "Session usage", exact: true });
+  const codexSession = usage.getByRole("link", { name: "Codex session: 10% left", exact: true });
+  await expect(codexSession).toBeVisible();
+  await expect(usage.getByRole("link", { name: /^Claude session:/ })).toBeVisible();
+  await codexSession.hover();
+  await expect(usage.getByRole("tooltip")).toContainText(/Resets in .*h .*m/);
+  await page.getByRole("link", { name: "Compute", exact: true }).click();
+  await expect(codexSession).toBeVisible();
+  await codexSession.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(usage.getByRole("tooltip")).toBeVisible();
+  await codexSession.click();
+  await expect(page.getByRole("heading", { name: "Coordinator" })).toBeVisible();
   await page.screenshot({ path: "test-results/coordinator.png", fullPage: true });
 
   await page.getByRole("spinbutton", { name: "Session reserve %" }).fill("10");

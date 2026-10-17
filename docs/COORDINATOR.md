@@ -12,6 +12,7 @@ Dependency readiness is enforced by the runner, separately from usage policy. Fi
 - `server/src/coordination.ts`: the `Coordinator` service. It builds the snapshot from the store and the runner, applies decisions, stores readings and the policy as JSON under `coordinator.*` keys in the `settings` table (no migration), and registers `/api/coordinator*`.
 - `runner.ts`: calls `beforeSchedule()` on every scheduling pass and passes the returned holds to `scheduler.ts`. It forwards `rate_limit` events and limit failures to `observe()`. A coordinator error is logged, and the queue then runs as if the coordinator were off.
 - `web/src/pages/CoordinatorPage.tsx`: provider cards, decisions, paused tasks, policy and activity.
+- `web/src/components/SessionUsage.tsx`: shared sidebar summary of Claude/Codex session remaining percentages on every route, with reset countdown and local time on hover or keyboard focus. Uses the coordinator query and live invalidations, refreshing every 30 seconds; weekly limits remain on the coordinator page.
 
 ## Usage data
 
