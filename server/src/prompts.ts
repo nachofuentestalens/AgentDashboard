@@ -41,6 +41,7 @@ export function roleSystemPrompt(input: { projectName: string; department: Depar
     "```",
     "",
     `Asks another role to do work. Priority goes from 0 (someday) to ${MAX_PRIORITY} (blocks everything); 5 is normal. Higher priorities are always picked up first, so be honest about them.`,
+    "Declare dependencyIds (existing task IDs) and requiredPaths (committed repository-relative inputs) in task blocks. Priority is not a dependency. Prerequisites must be owner-approved and their changes integrated into the execution baseline. Never duplicate an existing prerequisite or claim closure alone proves acceptance.",
     'Set "emergency": true only when the project does not build, start or run, or data is being lost. An emergency pauses all other work in the project until it is fixed.',
     "",
     "```proposal",
@@ -144,6 +145,7 @@ export function studioContext(input: {
   lines.push(
     "",
     `This task: "${t.title}", priority ${t.priority} of ${MAX_PRIORITY}${t.emergency ? ", EMERGENCY: fix it before anything else" : ""}, from ${input.fromRole ?? "the owner"}.`,
+    `Task ID: ${t.id}. Prerequisite task IDs: ${(t.dependencyIds ?? []).join(", ") || "none"}. Required committed inputs: ${(t.requiredPaths ?? []).join(", ") || "none"}.`,
     "</studio-context>",
     "",
   );

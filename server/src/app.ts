@@ -25,6 +25,7 @@ import { checkRepo, initRepo } from "./git.ts";
 import { HttpError, parse } from "./http.ts";
 import { Runner } from "./runner.ts";
 import { Store } from "./store.ts";
+import { baselineBlocker } from "./readiness.ts";
 import { Studio } from "./studio.ts";
 import { registerStudioRoutes } from "./studio-routes.ts";
 import { Coordinator, registerCoordinatorRoutes } from "./coordination.ts";
@@ -176,6 +177,8 @@ export async function buildApp(options: AppOptions): Promise<App> {
     const task = studio.createTask({
       projectId: request.params.id,
       roleId: body.roleId ?? null,
+      dependencyIds: body.dependencyIds,
+      requiredPaths: body.requiredPaths,
       title: body.title || (body.message ? titleFrom(body.message) : "New chat"),
       message: body.message,
       canEdit: body.canEdit,
@@ -194,6 +197,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
     const task = store.getTask(request.params.id);
     if (!task) return notFound(reply, "Task");
     const detail: TaskDetail = {
+      readiness: await baselineBlocker(store, task, store.getWorkspace(task.id)?.path ?? store.getProject(task.projectId)!.repoPath),
       task,
       messages: store.listMessages(task.id),
       runs: store.listRuns(task.id),
@@ -216,6 +220,11 @@ export async function buildApp(options: AppOptions): Promise<App> {
       (body.tokenBudget !== undefined || body.toolBudget !== undefined || body.autoCompact !== undefined)
     )
       return reply.code(409).send({ error: "Wait for the agent or stop it before changing usage controls." });
+    if ((body.dependencyIds !== undefined || body.requiredPaths !== undefined) && (runner.isTaskRunning(current.id) || current.status === "queued"))
+      return reply.code(409).send({ error: "Stop the task before changing prerequisites." });
+    if ((body.dependencyIds !== undefined || body.requiredPaths !== undefined) && (current.stage === "approved" || current.stage === "closed"))
+      return reply.code(409).send({ error: "Continue or reopen the task before changing its approved prerequisites." });
+    if (body.dependencyIds) store.validateDependencies(current.projectId, current.id, body.dependencyIds, !!current.roleId);
     const { done, ...patch } = body;
     if (patch.reviewerRoleId !== undefined) {
       if (!current.roleId) return reply.code(400).send({ error: "Only a role's task has a reviewer." });
@@ -243,7 +252,13 @@ export async function buildApp(options: AppOptions): Promise<App> {
       emergency: current.roleId ? patch.emergency : undefined,
     })!;
     bus.publish({ type: "task_updated", task });
-    if (patch.priority !== undefined || patch.emergency !== undefined || done !== undefined) {
+    if (
+      patch.dependencyIds !== undefined ||
+      patch.requiredPaths !== undefined ||
+      patch.priority !== undefined ||
+      patch.emergency !== undefined ||
+      done !== undefined
+    ) {
       bus.publish({ type: "studio_changed", projectId: task.projectId });
       bus.publish({ type: "inbox_changed" });
       runner.tick();

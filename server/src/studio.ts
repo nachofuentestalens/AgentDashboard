@@ -28,6 +28,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const sinceDays = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString();
 
 export interface NewStudioTask {
+  dependencyIds?: string[];
+  requiredPaths?: string[];
   projectId: string;
   roleId: string | null;
   title: string;
@@ -191,6 +193,8 @@ export class Studio implements ReplyHandler {
     if (input.roleId && (!role || role.projectId !== input.projectId)) throw new HttpError("That role is not part of this project.", 400);
     const task = this.store.createTask({
       projectId: input.projectId,
+      dependencyIds: input.dependencyIds,
+      requiredPaths: input.requiredPaths,
       title: input.title,
       canEdit: role ? role.canEdit && input.canEdit !== false : (input.canEdit ?? true),
       provider: input.provider ?? null,
@@ -257,6 +261,12 @@ export class Studio implements ReplyHandler {
           notices.push({ level: "warn", text: `Ignored a proposal: ${(error as Error).message}` });
         }
       } else {
+        try {
+          this.store.validateDependencies(project.id, null, block.dependencyIds ?? []);
+        } catch (error) {
+          notices.push({ level: "warn", text: "Ignored task: " + (error as Error).message });
+          continue;
+        }
         const target = this.store.findRoleByName(project.id, block.role);
         const depth = task.depth + 1;
         const reason =
@@ -277,6 +287,8 @@ export class Studio implements ReplyHandler {
           fromRoleName: role?.name ?? null,
           toRoleName: target?.name ?? block.role,
           roleId: target?.id ?? null,
+          dependencyIds: block.dependencyIds,
+          requiredPaths: block.requiredPaths,
           title: block.title,
           prompt: block.prompt,
           priority: block.priority,
@@ -291,6 +303,8 @@ export class Studio implements ReplyHandler {
           const created = this.createTask({
             projectId: project.id,
             roleId: target!.id,
+            dependencyIds: block.dependencyIds,
+            requiredPaths: block.requiredPaths,
             title: block.title,
             message: block.prompt,
             priority: block.priority,
@@ -389,6 +403,8 @@ export class Studio implements ReplyHandler {
     const task = this.createTask({
       projectId: handoff.projectId,
       roleId,
+      dependencyIds: handoff.dependencyIds,
+      requiredPaths: handoff.requiredPaths,
       title: handoff.title,
       message: handoff.prompt,
       priority: patch.priority ?? handoff.priority,

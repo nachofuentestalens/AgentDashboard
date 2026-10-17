@@ -18,6 +18,7 @@ export interface QueuedRun {
   estimateUsd: number;
   // The provider it would run on, for the coordinator's holds.
   provider?: Provider;
+  dependencyBlocker?: string | null;
 }
 
 // The coordinator holds a provider's queued work: below minPriority, or all of it when null.
@@ -90,6 +91,7 @@ export function plan(input: SchedulerState): Plan {
   // limit and the freeze (they are the reason for it), but still need an agent and must not edit
   // files alongside another writer of their department.
   const blocker = (q: QueuedRun): string | null => {
+    if (q.dependencyBlocker) return q.dependencyBlocker;
     const dept = input.departments.get(q.departmentId);
     const deptName = dept?.name ?? "Its department";
     if (!input.staffedRoles.has(q.roleId)) return `No ${q.roleName} agent is available. Hire one or unpause one in the Studio.`;

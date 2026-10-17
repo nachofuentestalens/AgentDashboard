@@ -228,7 +228,7 @@ export class Coordinator implements RunCoordinator {
     const backlog = this.store
       .listProjects()
       .flatMap((p) => this.store.backlogTasks(p.id))
-      .filter((t) => t.roleId && staffed.has(t.roleId) && !t.emergency)
+      .filter((t) => t.roleId && staffed.has(t.roleId) && !t.emergency && !this.store.dependencyBlocker(t))
       .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt))
       .map((t) => ({ taskId: t.id, title: t.title, provider: this.runner.taskProvider(t), priority: t.priority }));
     const states = new Map<Provider, ProviderState>(providers.map((p) => [p.provider, p]));

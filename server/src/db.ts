@@ -252,6 +252,21 @@ const MIGRATIONS: (string | ((db: Db) => void))[] = [
       if (!columns.has(name)) db.exec(`ALTER TABLE task_workspaces ADD COLUMN ${name} TEXT`);
     }
   },
+  // 9: Explicit prerequisite graph and committed input requirements.
+  (db) => {
+    const taskColumns = new Set((db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name));
+    if (!taskColumns.has("dependency_approved")) {
+      db.exec(`ALTER TABLE tasks ADD COLUMN dependency_approved INTEGER NOT NULL DEFAULT 0;
+        UPDATE tasks SET dependency_approved = 1 WHERE stage = 'approved' OR
+          (stage = 'closed' AND (SELECT verdict FROM task_reviews WHERE task_id = tasks.id ORDER BY created_at DESC, rowid DESC LIMIT 1) = 'approved');`);
+    }
+    for (const table of ["tasks", "handoffs"]) {
+      const columns = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+      for (const name of ["dependency_ids", "required_paths"]) {
+        if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} TEXT NOT NULL DEFAULT '[]'`);
+      }
+    }
+  },
 ];
 
 export type Db = DatabaseSync;

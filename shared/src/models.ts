@@ -144,6 +144,8 @@ export const DEFAULT_PRIORITY = 5;
 export const MAX_DELEGATION_DEPTH = 2;
 
 export interface Task {
+  dependencyIds: string[];
+  requiredPaths: string[];
   handoff: string | null;
   handoffRunId: string | null;
   autoCompact: boolean;
@@ -278,6 +280,7 @@ export function taskGitState(w: TaskWorkspace | null): TaskGitState | null {
 }
 
 export interface TaskDetail {
+  readiness?: string | null;
   task: Task;
   messages: Message[];
   runs: Run[];
@@ -454,6 +457,8 @@ export type HandoffStatus = "pending" | "created" | "rejected";
 
 // A task one agent asked for another role.
 export interface Handoff {
+  dependencyIds?: string[];
+  requiredPaths?: string[];
   id: string;
   projectId: string;
   fromTaskId: string | null;

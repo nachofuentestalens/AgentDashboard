@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DEFAULT_PRIORITY, MAX_PRIORITY, MIN_PRIORITY } from "./models.ts";
+import { dependencyIds, requiredPaths } from "./schemas.ts";
 
 // Agents talk to the dashboard by ending a reply with fenced blocks:
 //   ```proposal  {"docPath": "design/game/combat.md", "rationale": "...", "body": "# Combat\n..."}
@@ -12,7 +13,7 @@ import { DEFAULT_PRIORITY, MAX_PRIORITY, MIN_PRIORITY } from "./models.ts";
 
 export type ReplyBlock =
   | { type: "proposal"; docPath: string; rationale: string; body: string }
-  | { type: "task"; role: string; title: string; prompt: string; priority: number; emergency: boolean }
+  | { type: "task"; role: string; title: string; prompt: string; priority: number; emergency: boolean; dependencyIds?: string[]; requiredPaths?: string[] }
   | { type: "question"; question: string }
   | { type: "step"; state: "done" | "partial" | "complete"; summary: string; next: string | null }
   | { type: "review"; verdict: "pass" | "changes"; findings: string[] }
@@ -44,6 +45,8 @@ const proposal = z.object({
 });
 
 const task = z.object({
+  dependencyIds: dependencyIds.optional(),
+  requiredPaths: requiredPaths.optional(),
   role: z.string().trim().min(1).max(60),
   title: z.string().trim().min(1).max(120),
   prompt: z.string().trim().min(1).max(100_000),

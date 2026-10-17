@@ -40,6 +40,7 @@ import { efficiencyInstructions, extractHandoff, HANDOFF_REQUEST, totalTokens } 
 import { modelRoutingInstructions, parseModelReview, validateModelReview } from "./model-routing.ts";
 import { Workspaces } from "./workspaces.ts";
 import { Github } from "./github.ts";
+import { baselineBlocker } from "./readiness.ts";
 
 export class RunnerError extends HttpError {}
 
@@ -96,6 +97,7 @@ export class Runner {
   private readonly github: Github;
   private readonly workspaceBusy = new Set<string>();
   private tickPending = false;
+  private tickAgain = false;
   private closed = false;
   private readonly recheck: NodeJS.Timeout;
   replies: ReplyHandler | null = null;
@@ -415,20 +417,33 @@ export class Runner {
 
   // Runs a scheduling pass soon. Calls in the same turn of the event loop share one pass.
   tick(): void {
-    if (this.tickPending || this.closed) return;
+    if (this.closed) return;
+    if (this.tickPending) {
+      this.tickAgain = true;
+      return;
+    }
     this.tickPending = true;
-    setImmediate(() => {
-      this.tickPending = false;
-      if (this.closed) return;
-      this.startIdleBacklog();
-      let holds = new Map<Provider, ProviderHold>();
+    setImmediate(async () => {
       try {
-        holds = this.coordinator?.beforeSchedule() ?? holds;
+        if (this.closed) return;
+        this.startIdleBacklog();
+        let holds = new Map<Provider, ProviderHold>();
+        try {
+          holds = this.coordinator?.beforeSchedule() ?? holds;
+        } catch (error) {
+          // A coordinator fault must never stop the queue; it runs as if the coordinator were off.
+          console.error("Coordinator pass failed:", error);
+        }
+        await this.schedule(holds);
       } catch (error) {
-        // A coordinator fault must never stop the queue; it runs as if the coordinator were off.
-        console.error("Coordinator pass failed:", error);
+        console.error("Scheduling pass failed; queued work remains held:", error);
+      } finally {
+        this.tickPending = false;
+        if (this.tickAgain) {
+          this.tickAgain = false;
+          this.tick();
+        }
       }
-      this.schedule(holds);
     });
   }
 
@@ -457,7 +472,7 @@ export class Runner {
     );
     for (const project of projects) {
       for (const task of this.store.backlogTasks(project.id)) {
-        if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId)) continue;
+        if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId) || this.store.dependencyBlocker(task)) continue;
         busy.add(task.roleId);
         try {
           this.stageAction(task.id, { action: "start" });
@@ -666,7 +681,16 @@ export class Runner {
   }
 
   // One scheduling pass: start what may start, and tell queued runs why they wait.
-  private schedule(holds: Map<Provider, ProviderHold>): void {
+  private async schedule(holds: Map<Provider, ProviderHold>): Promise<void> {
+    const readiness = new Map<string, string | null>();
+    for (const run of this.store.runsWithStatus("queued")) {
+      const task = this.store.getTask(run.taskId);
+      const project = task && this.store.getProject(task.projectId);
+      if (task && project && run.purpose === "work") {
+        readiness.set(run.id, await baselineBlocker(this.store, task, this.store.getWorkspace(task.id)?.path ?? project.repoPath));
+      }
+    }
+    if (this.closed) return;
     const queuedRuns = this.store.runsWithStatus("queued");
     if (queuedRuns.length === 0) return;
 
@@ -703,10 +727,13 @@ export class Runner {
         if (task) this.publishTask(this.store.updateTask(task.id, { status: "idle", ...this.reviewCancelled(run) }));
         continue;
       }
+      // New arrivals during asynchronous Git checks wait for the next pass.
+      if (run.purpose === "work" && !readiness.has(run.id)) continue;
       const { effort, provider } = this.choice(this.actorTask(task, run));
       queued.push({
         provider,
         runId: run.id,
+        dependencyBlocker: run.purpose === "work" ? (this.store.dependencyBlocker(task) ?? readiness.get(run.id)) : null,
         projectId: task.projectId,
         roleId: role.id,
         roleName: role.name,
@@ -1104,6 +1131,10 @@ export class Runner {
         return;
       }
       const repoPath = workspace?.path ?? project.repoPath;
+      if (run.purpose === "work") {
+        const blocked = await baselineBlocker(this.store, this.store.getTask(task.id)!, repoPath);
+        if (blocked) throw new Error(blocked);
+      }
       if (workspace) {
         record({ kind: "notice", level: "info", text: `Isolated worktree: ${workspace.path} (${workspace.branch}). The project checkout is unchanged.` });
         prompt +=

@@ -57,6 +57,9 @@ Demo checklist (real Claude Code, on Windows):
 
 ## Phase 3: workflows
 
+- [x] Explicit task dependencies, committed-input and prerequisite-ancestry guards, owner approval gating, prerequisite editor and agent handoff fields; [details](DEPENDENCIES.md)
+- [ ] Owner-approved baseline integration and successor worktree refresh; [Banner & Bounty recovery audit](BANNER_BOUNTY_RECOVERY.md)
+
 - [x] Task stages (backlog → in progress → needs review → approved → closed), `step`/`review` blocks, review runs, grouped board with "Next up": design in [docs/TASK_STATES.md](TASK_STATES.md)
   - [x] Rollout 1: stage model, migration, owner actions endpoint, stage pill and stage actions on the task page
   - [x] Rollout 2: `step` block, grouped board, Next-up banner, Inbox groups

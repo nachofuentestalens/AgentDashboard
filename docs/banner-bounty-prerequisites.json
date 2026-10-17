@@ -1,0 +1,280 @@
+{
+  "projectId": "c6faaeda-b5c2-4d67-b351-1e1dd9f594a7",
+  "source": "Read-only audit 2026-10-17; review after baseline recovery. This file does not execute requests.",
+  "patches": [
+    {
+      "milestoneTask": "M1-01",
+      "taskId": "2435fae9-1fb0-4d8b-918e-4cce69555156",
+      "method": "PATCH",
+      "path": "/api/tasks/2435fae9-1fb0-4d8b-918e-4cce69555156",
+      "body": {
+        "dependencyIds": [],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/studio/architecture.md",
+          "design/studio/tech-stack.md",
+          "design/game/first-playable.md",
+          "design/qa/acceptance.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-02",
+      "taskId": "97912a8f-d421-462c-a449-60820c36ec46",
+      "method": "PATCH",
+      "path": "/api/tasks/97912a8f-d421-462c-a449-60820c36ec46",
+      "body": {
+        "dependencyIds": ["2435fae9-1fb0-4d8b-918e-4cce69555156"],
+        "requiredPaths": ["AGENTS.md", "design/game/first-playable.md", "design/studio/contracts.md", "design/studio/reports/M1-01.md"]
+      }
+    },
+    {
+      "milestoneTask": "M1-03",
+      "taskId": "57a881e3-488c-4211-861b-e714e206bf09",
+      "method": "PATCH",
+      "path": "/api/tasks/57a881e3-488c-4211-861b-e714e206bf09",
+      "body": {
+        "dependencyIds": ["97912a8f-d421-462c-a449-60820c36ec46"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/studio/vision.md",
+          "design/game/content.md",
+          "design/game/interface.md",
+          "design/game/combat.md",
+          "design/game/reports/M1-02.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-04",
+      "taskId": "d1bf98bc-6c22-42a0-97f3-ca703d374882",
+      "method": "PATCH",
+      "path": "/api/tasks/d1bf98bc-6c22-42a0-97f3-ca703d374882",
+      "body": {
+        "dependencyIds": ["97912a8f-d421-462c-a449-60820c36ec46"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/game/first-playable.md",
+          "design/game/combat.md",
+          "design/game/content.md",
+          "design/studio/contracts.md",
+          "design/game/reports/M1-02.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-05",
+      "taskId": "a786bb07-0994-41e0-b185-5e87b55ee4c3",
+      "method": "PATCH",
+      "path": "/api/tasks/a786bb07-0994-41e0-b185-5e87b55ee4c3",
+      "body": {
+        "dependencyIds": ["2435fae9-1fb0-4d8b-918e-4cce69555156"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/studio/tech-stack.md",
+          "design/studio/architecture.md",
+          "design/studio/contracts.md",
+          "design/studio/reports/M1-01.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-06",
+      "taskId": "ab16ab28-0f07-4192-990a-3f8224ed117a",
+      "method": "PATCH",
+      "path": "/api/tasks/ab16ab28-0f07-4192-990a-3f8224ed117a",
+      "body": {
+        "dependencyIds": ["97912a8f-d421-462c-a449-60820c36ec46", "d1bf98bc-6c22-42a0-97f3-ca703d374882", "a786bb07-0994-41e0-b185-5e87b55ee4c3"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/game/combat.md",
+          "design/game/content.md",
+          "design/game/economy/baseline.md",
+          "design/studio/contracts.md",
+          "design/game/reports/M1-02.md",
+          "design/game/reports/M1-04.md",
+          "package.json",
+          "package-lock.json",
+          ".node-version",
+          "apps/web/package.json",
+          "apps/server/package.json",
+          "packages/game/package.json",
+          "packages/contracts/package.json",
+          "packages/content/package.json",
+          "reports/engineering/M1-05.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-07",
+      "taskId": "83487911-08ab-44dc-85c8-3267df2768da",
+      "method": "PATCH",
+      "path": "/api/tasks/83487911-08ab-44dc-85c8-3267df2768da",
+      "body": {
+        "dependencyIds": ["2435fae9-1fb0-4d8b-918e-4cce69555156", "a786bb07-0994-41e0-b185-5e87b55ee4c3"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/studio/contracts.md",
+          "design/studio/architecture.md",
+          "design/qa/acceptance.md",
+          "design/studio/reports/M1-01.md",
+          "package.json",
+          "package-lock.json",
+          ".node-version",
+          "apps/web/package.json",
+          "apps/server/package.json",
+          "packages/game/package.json",
+          "packages/contracts/package.json",
+          "packages/content/package.json",
+          "reports/engineering/M1-05.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-08",
+      "taskId": "de08242c-5507-4f0c-bb74-0d449df68d6b",
+      "method": "PATCH",
+      "path": "/api/tasks/de08242c-5507-4f0c-bb74-0d449df68d6b",
+      "body": {
+        "dependencyIds": ["ab16ab28-0f07-4192-990a-3f8224ed117a", "83487911-08ab-44dc-85c8-3267df2768da"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/studio/contracts.md",
+          "design/game/combat.md",
+          "design/game/economy/baseline.md",
+          "design/qa/acceptance.md",
+          "packages/game/src",
+          "packages/content/src",
+          "reports/engineering/M1-06.md",
+          "apps/server/src",
+          "packages/contracts/src",
+          "reports/engineering/M1-07.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-09",
+      "taskId": "5551eb95-466e-4218-b4f6-85d4f2775430",
+      "method": "PATCH",
+      "path": "/api/tasks/5551eb95-466e-4218-b4f6-85d4f2775430",
+      "body": {
+        "dependencyIds": ["97912a8f-d421-462c-a449-60820c36ec46", "57a881e3-488c-4211-861b-e714e206bf09"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/game/interface.md",
+          "design/game/narrative/copy.md",
+          "design/studio/contracts.md",
+          "design/game/combat.md",
+          "design/game/content.md",
+          "design/game/reports/M1-02.md",
+          "design/game/reports/M1-03.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-10",
+      "taskId": "3e346450-4689-4cff-b285-4332775a5620",
+      "method": "PATCH",
+      "path": "/api/tasks/3e346450-4689-4cff-b285-4332775a5620",
+      "body": {
+        "dependencyIds": ["de08242c-5507-4f0c-bb74-0d449df68d6b", "5551eb95-466e-4218-b4f6-85d4f2775430", "e6a6782d-1a59-4fef-805c-34896e700125"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/game/ui-spec.md",
+          "design/game/narrative/copy.md",
+          "design/studio/contracts.md",
+          "design/qa/acceptance.md",
+          "apps/server/src",
+          "reports/engineering/M1-08.md",
+          "design/game/reports/M1-09.md",
+          "reports/engineering/M1-11.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-11",
+      "taskId": "e6a6782d-1a59-4fef-805c-34896e700125",
+      "method": "PATCH",
+      "path": "/api/tasks/e6a6782d-1a59-4fef-805c-34896e700125",
+      "body": {
+        "dependencyIds": ["ab16ab28-0f07-4192-990a-3f8224ed117a", "83487911-08ab-44dc-85c8-3267df2768da"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/studio/contracts.md",
+          "design/studio/architecture.md",
+          "design/game/combat.md",
+          "packages/game/src",
+          "packages/content/src",
+          "reports/engineering/M1-06.md",
+          "apps/server/src",
+          "packages/contracts/src",
+          "reports/engineering/M1-07.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-12",
+      "taskId": "f9982f6f-5140-4b5e-b8d2-09a06a7726bd",
+      "method": "PATCH",
+      "path": "/api/tasks/f9982f6f-5140-4b5e-b8d2-09a06a7726bd",
+      "body": {
+        "dependencyIds": ["de08242c-5507-4f0c-bb74-0d449df68d6b"],
+        "requiredPaths": ["AGENTS.md", "design/game/economy/baseline.md", "design/qa/acceptance.md", "apps/server/src", "reports/engineering/M1-08.md"]
+      }
+    },
+    {
+      "milestoneTask": "M1-13",
+      "taskId": "c51d5cdd-1fe7-4575-a2d2-363f802da52a",
+      "method": "PATCH",
+      "path": "/api/tasks/c51d5cdd-1fe7-4575-a2d2-363f802da52a",
+      "body": {
+        "dependencyIds": ["d1bf98bc-6c22-42a0-97f3-ca703d374882", "f9982f6f-5140-4b5e-b8d2-09a06a7726bd"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/game/economy/baseline.md",
+          "reports/engineering/M1-12.md",
+          "design/game/reports/M1-04.md",
+          "scripts/simulate.mjs"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-14",
+      "taskId": "5a83fdeb-8ba2-45a6-a588-d8395541e31b",
+      "method": "PATCH",
+      "path": "/api/tasks/5a83fdeb-8ba2-45a6-a588-d8395541e31b",
+      "body": {
+        "dependencyIds": ["3e346450-4689-4cff-b285-4332775a5620", "c51d5cdd-1fe7-4575-a2d2-363f802da52a"],
+        "requiredPaths": [
+          "AGENTS.md",
+          "design/game/economy/tuning.md",
+          "design/qa/acceptance.md",
+          "design/studio/tech-stack.md",
+          "apps/web/src",
+          "reports/engineering/M1-10.md",
+          "design/game/reports/M1-13.md"
+        ]
+      }
+    },
+    {
+      "milestoneTask": "M1-15",
+      "taskId": "e9abdfb6-28a9-4f7b-b14d-8e1aaffdd4c9",
+      "method": "PATCH",
+      "path": "/api/tasks/e9abdfb6-28a9-4f7b-b14d-8e1aaffdd4c9",
+      "body": {
+        "dependencyIds": ["5a83fdeb-8ba2-45a6-a588-d8395541e31b"],
+        "requiredPaths": ["AGENTS.md", "design/qa/acceptance.md", "reports/engineering/M1-14.md", "design/studio/contracts.md", "README.md"]
+      }
+    },
+    {
+      "milestoneTask": "M1-16",
+      "taskId": "dafef25f-76fa-4e2a-85ec-8c7c80a63110",
+      "method": "PATCH",
+      "path": "/api/tasks/dafef25f-76fa-4e2a-85ec-8c7c80a63110",
+      "body": {
+        "dependencyIds": ["e9abdfb6-28a9-4f7b-b14d-8e1aaffdd4c9"],
+        "requiredPaths": ["AGENTS.md", "qa/reports/M1-15.md", "design/game/economy/tuning.md", "design/studio/vision.md", "tests/e2e"]
+      }
+    }
+  ]
+}
