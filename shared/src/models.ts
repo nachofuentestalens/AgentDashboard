@@ -560,15 +560,15 @@ export const QUOTA_WINDOWS: readonly QuotaWindow[] = ["session", "weekly"];
 export type CoordinatorMode = "off" | "advise" | "auto";
 export type QuotaLevel = "unknown" | "ok" | "conserve" | "reserve" | "exhausted";
 
-// A provider's own report of a limit (from its CLI), the owner's reading of a usage page, or a run
-// that failed on a limit.
+// A provider's own report of a limit (from its CLI or its usage API), the owner's reading of a usage
+// page, or a run that failed on a limit.
 export interface QuotaReading {
   provider: Provider;
   window: QuotaWindow;
   usedPercent: number | null;
   resetsAt: string | null;
   rejected: boolean;
-  source: "cli" | "owner" | "error";
+  source: "cli" | "api" | "owner" | "error";
   at: string;
 }
 
@@ -621,7 +621,7 @@ export interface QuotaWindowView {
   window: QuotaWindow;
   usedPercent: number | null;
   // estimate: a reading plus tokens since, or tokens against a cap. reset: the window reset since the last reading.
-  source: "cli" | "owner" | "error" | "estimate" | "reset" | "none";
+  source: "cli" | "api" | "owner" | "error" | "estimate" | "reset" | "none";
   resetsAt: string | null;
   readingAt: string | null;
   level: QuotaLevel;
@@ -637,6 +637,8 @@ export interface ProviderQuotaView {
   weekly: QuotaWindowView;
   running: number;
   queued: number;
+  // The last automatic read of the provider's usage API; null when it has none or none ran yet.
+  usageCheck: { at: string; error: string | null } | null;
 }
 
 export type CoordinatorActionType = "pause" | "resume" | "start" | "switch";

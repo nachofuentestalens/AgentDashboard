@@ -123,6 +123,7 @@ export const api = {
   coordinator: () => request<CoordinatorView>("GET", "/api/coordinator"),
   saveCoordinatorConfig: (config: CoordinatorConfig) => request<CoordinatorView>("PUT", "/api/coordinator/config", config),
   addQuotaReading: (body: QuotaReadingBody) => request<CoordinatorView>("POST", "/api/coordinator/readings", body),
+  refreshUsage: () => request<CoordinatorView>("POST", "/api/coordinator/refresh", {}),
   applyCoordinatorAction: (key: string) => request<CoordinatorView>("POST", "/api/coordinator/apply", { key }),
 
   feedback: (projectId: string) => request<FeedbackItem[]>("GET", `/api/projects/${projectId}/feedback`),

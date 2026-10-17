@@ -28,6 +28,7 @@ import { Store } from "./store.ts";
 import { Studio } from "./studio.ts";
 import { registerStudioRoutes } from "./studio-routes.ts";
 import { Coordinator, registerCoordinatorRoutes } from "./coordination.ts";
+import type { UsageFetcher } from "./usage.ts";
 
 export interface AppOptions {
   dataDir: string;
@@ -36,6 +37,8 @@ export interface AppOptions {
   // Tests start fake agents instead of the CLIs Settings point at.
   launchers?: Partial<Record<Provider, Launcher>>;
   logger?: boolean;
+  // Reads providers' usage APIs for the coordinator; absent in tests, which never go online.
+  usage?: UsageFetcher;
 }
 
 export interface App {
@@ -69,7 +72,8 @@ export async function buildApp(options: AppOptions): Promise<App> {
   const bus = new Bus();
   const runner = new Runner(store, bus, options.dataDir, options.launchers);
   const studio = new Studio(store, bus, runner);
-  const coordinator = new Coordinator(store, bus, runner);
+  const coordinator = new Coordinator(store, bus, runner, Date.now, options.usage ?? null);
+  coordinator.startUsagePolling();
   store.markInterrupted();
   const modelCatalog = await loadModelCatalog(options.dataDir, store.getSettings().codexPath, options.launchers?.codex);
   runner.modelOptions = modelCatalog.presets;
@@ -346,6 +350,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
     studio,
     bus,
     close: async () => {
+      coordinator.stopUsagePolling();
       runner.close();
       await app.close();
       db.close();

@@ -47,15 +47,16 @@ const systemText = systemFile ? fs.readFileSync(systemFile, "utf8") : "";
 const who = systemText.match(/^You are (.+?), the (.+?) in the (.+?) department/);
 
 emit({ type: "system", subtype: "init", session_id: sessionId, model, cwd: process.cwd(), tools: [] });
-// [ratelimit:92] reports the session window 92% used, resetting in an hour.
-const rateLimit = prompt.match(/\[ratelimit:(\d+)\]/);
+// [ratelimit:92] reports the session window 92% used, resetting in an hour. [ratelimit:reset]
+// reports only the reset time, as the real CLI does far from the limit.
+const rateLimit = prompt.match(/\[ratelimit:(\d+|reset)\]/);
 if (rateLimit)
   emit({
     type: "rate_limit_event",
     rate_limit_info: {
       status: Number(rateLimit[1]) >= 100 ? "rejected" : "allowed",
       rateLimitType: "five_hour",
-      utilization: Number(rateLimit[1]) / 100,
+      ...(rateLimit[1] === "reset" ? {} : { utilization: Number(rateLimit[1]) / 100 }),
       resetsAt: Math.floor(Date.now() / 1000) + 3600,
     },
     session_id: sessionId,

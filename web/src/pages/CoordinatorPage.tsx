@@ -37,6 +37,13 @@ function until(iso: string | null, now = Date.now()): string {
   return h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : h ? `${h}h ${minutes % 60}m` : `${minutes}m`;
 }
 
+// The local clock time of a reset, with the weekday when it is not today.
+function resetClock(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === now.toDateString() ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
 export function CoordinatorPage() {
   const qc = useQueryClient();
   // Countdowns move on their own, so the view refreshes even without pushes.
@@ -143,6 +150,7 @@ export function CoordinatorPage() {
 
 function ProviderCard({ p, config, onSaved }: { p: ProviderQuotaView; config: CoordinatorConfig; onSaved: (v: CoordinatorView) => void }) {
   const level = LEVEL[p.level];
+  const refresh = useMutation({ mutationFn: api.refreshUsage, onSuccess: onSaved });
   return (
     <section className="space-y-3 rounded-xl border border-ink-800 bg-ink-900/60 p-4" aria-label={providerLabel(p.provider)}>
       <div className="flex items-center justify-between gap-2">
@@ -155,6 +163,17 @@ function ProviderCard({ p, config, onSaved }: { p: ProviderQuotaView; config: Co
       <p className="text-xs text-ink-400">
         {p.running} running · {p.queued} queued
       </p>
+      {p.usageCheck && (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className={p.usageCheck.error ? "text-amber-300" : "text-ink-400"}>
+            {p.usageCheck.error ? `Usage not read: ${p.usageCheck.error}` : `Usage read from ${providerLabel(p.provider)} ${ago(p.usageCheck.at)}`}
+          </span>
+          <Button onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+            {refresh.isPending ? "Reading…" : "Refresh"}
+          </Button>
+        </div>
+      )}
+      <ErrorNote error={refresh.error} />
       <ReadingForm provider={p.provider} onSaved={onSaved} />
     </section>
   );
@@ -162,6 +181,7 @@ function ProviderCard({ p, config, onSaved }: { p: ProviderQuotaView; config: Co
 
 const SOURCE: Record<QuotaWindowView["source"], string> = {
   cli: "reported by the CLI",
+  api: "from the provider's usage page",
   owner: "your reading",
   error: "a run hit the limit",
   estimate: "estimated from tokens",
@@ -176,9 +196,12 @@ function Meter({ w, reserve, title }: { w: QuotaWindowView; reserve: number; tit
     <div>
       <div className="flex justify-between text-xs text-ink-400">
         <span>
-          {title}: <span className="text-ink-200">{used === null ? "unknown" : `${Math.round(used)}% used`}</span>
+          {title}:{" "}
+          <span className="text-ink-200">{used === null ? "unknown" : `${Math.round(used)}% used · ${Math.max(0, 100 - Math.round(used))}% left`}</span>
         </span>
-        <span>resets in {until(w.resetsAt)}</span>
+        <span title={w.resetsAt ? new Date(w.resetsAt).toLocaleString() : undefined}>
+          {w.resetsAt ? `resets in ${until(w.resetsAt)} (${resetClock(w.resetsAt)})` : "reset time unknown"}
+        </span>
       </div>
       <div
         className="relative mt-1 h-2 overflow-hidden rounded-full bg-ink-800"

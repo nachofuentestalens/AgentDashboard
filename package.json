@@ -14,7 +14,7 @@
     "typecheck": "tsc -p shared && tsc -p server && tsc -p web",
     "test": "vitest run",
     "test:e2e": "pnpm build && playwright test",
-    "validate": "pnpm typecheck && pnpm test && pnpm test:e2e",
+    "validate": "pnpm format:check && pnpm typecheck && pnpm test && pnpm test:e2e",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

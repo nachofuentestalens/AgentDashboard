@@ -992,6 +992,7 @@ export class Runner {
       });
       const limited = status === "failed" ? limitWindowFromError(error) : null;
       if (limited) this.coordinator?.observe({ provider, window: limited, usedPercent: 100, resetsAt: null, rejected: true, source: "error" });
+      void this.coordinator?.refreshUsage(false);
       const routingText = [...events.flatMap((e) => (e.kind === "text" ? [e.text] : [])), reply].join("\n");
       const review = run.purpose === "work" ? parseModelReview(routingText) : null;
       const requestedSwitch = status === "succeeded" && review?.action === "switch";
