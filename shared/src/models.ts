@@ -296,9 +296,14 @@ export interface Settings {
   maxConcurrentRuns: number;
   // Spend over the last 24 hours after which role tasks wait. Null: no limit.
   dailyBudgetUsd: number | null;
+  // Allowances new tasks start with (tasks keep their own copy). Null: unlimited.
+  defaultTokenBudget: number | null;
+  defaultToolBudget: number | null;
 }
 
 export const DEFAULT_MAX_CONCURRENT_RUNS = 1;
+export const DEFAULT_TASK_TOKEN_BUDGET = 1_000_000;
+export const DEFAULT_TASK_TOOL_BUDGET = 80;
 
 // ---- studio: departments, roles and the agents staffing them
 

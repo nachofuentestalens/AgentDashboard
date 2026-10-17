@@ -3,6 +3,8 @@ import {
   DEFAULT_ALLOWED_TOOLS,
   DEFAULT_EFFORT,
   DEFAULT_MAX_CONCURRENT_RUNS,
+  DEFAULT_TASK_TOKEN_BUDGET,
+  DEFAULT_TASK_TOOL_BUDGET,
   DEFAULT_MODEL,
   DEFAULT_PRIORITY,
   DEFAULT_PROVIDER,
@@ -47,6 +49,8 @@ const optEffort = (v: unknown): Effort | null => (v == null ? null : asEffort(v)
 const optProvider = (v: unknown): Provider | null => (isProvider(v) ? v : null);
 const str = (v: unknown): string | null => (v as string | null) ?? null;
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
+// Unset: the built-in default. An empty string: cleared, meaning unlimited.
+const allowance = (v: string | undefined, fallback: number): number | null => (v === undefined ? fallback : v === "" ? null : Number(v));
 
 function parseJson<T>(text: unknown, fallback: T): T {
   try {
@@ -294,6 +298,8 @@ export class Store {
       defaultEffort: asEffort(map.get("defaultEffort") ?? DEFAULT_EFFORT),
       maxConcurrentRuns: Number(map.get("maxConcurrentRuns")) || DEFAULT_MAX_CONCURRENT_RUNS,
       dailyBudgetUsd: budget ? Number(budget) : null,
+      defaultTokenBudget: allowance(map.get("defaultTokenBudget"), DEFAULT_TASK_TOKEN_BUDGET),
+      defaultToolBudget: allowance(map.get("defaultToolBudget"), DEFAULT_TASK_TOOL_BUDGET),
     };
   }
 
@@ -499,11 +505,12 @@ export class Store {
     const at = now();
     // Only role tasks get a stage (docs/TASK_STATES.md); plain chats keep it null.
     const stage = input.roleId ? "backlog" : null;
+    const settings = this.getSettings();
     this.db
       .prepare(
         `INSERT INTO tasks (id, project_id, kind, title, status, session_id, session_started, can_edit, provider, model, effort, role_id, agent_id, priority,
-           emergency, parent_task_id, depth, created_by_role_id, question, stage, stage_changed_at, created_at, updated_at)
-         VALUES (?, ?, 'chat', ?, 'idle', NULL, 0, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+           emergency, parent_task_id, depth, created_by_role_id, question, stage, stage_changed_at, created_at, updated_at, token_budget, tool_budget)
+         VALUES (?, ?, 'chat', ?, 'idle', NULL, 0, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -523,6 +530,8 @@ export class Store {
         stage ? at : null,
         at,
         at,
+        settings.defaultTokenBudget,
+        settings.defaultToolBudget,
       );
     return this.getTask(id)!;
   }
