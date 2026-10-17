@@ -157,7 +157,8 @@ test("a desktop alert and the tab title say when something new waits on you", as
   const created = await request.post(`/api/projects/${projectId}/tasks`, {
     data: { roleId: qa.id, title: "Smoke test the alerts", message: "check [step-done]" },
   });
-  await expect.poll(shown).toContain('"Smoke test the alerts" is ready for review');
+  // The role task is queued, then the agent runs: slower than 5 s on CI's Windows runners.
+  await expect.poll(shown, { timeout: 30_000 }).toContain('"Smoke test the alerts" is ready for review');
   await expect(page).toHaveTitle(/^\(\d+\) AgentDashboard$/);
   // Closing it takes it off the inbox and out of the title count.
   const task = (await created.json()) as { id: string };
