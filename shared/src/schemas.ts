@@ -68,9 +68,12 @@ export const createTaskBody = z.object({
   emergency: z.boolean().optional(),
 });
 
+const tokenBudget = z.number().int().min(1).max(1_000_000_000).nullable();
+const toolBudget = z.number().int().min(1).max(100_000).nullable();
+
 export const updateTaskBody = z.object({
-  tokenBudget: z.number().int().min(1).max(1_000_000_000).nullable().optional(),
-  toolBudget: z.number().int().min(1).max(100_000).nullable().optional(),
+  tokenBudget: tokenBudget.optional(),
+  toolBudget: toolBudget.optional(),
   autoCompact: z.boolean().optional(),
   title: z.string().trim().min(1).max(120).optional(),
   canEdit: z.boolean().optional(),
@@ -123,6 +126,8 @@ export const updateSettingsBody = z.object({
   defaultEffort: effort.optional(),
   maxConcurrentRuns: z.number().int().min(1).max(32).optional(),
   dailyBudgetUsd: money.nullable().optional(),
+  defaultTokenBudget: tokenBudget.optional(),
+  defaultToolBudget: toolBudget.optional(),
 });
 
 export const departmentFields = z.object({
