@@ -5,6 +5,9 @@ import type {
   ApproveHandoffBody,
   ClaudeCheck,
   Compute,
+  CoordinatorConfig,
+  CoordinatorView,
+  QuotaReadingBody,
   CreateDepartmentBody,
   CreateProjectBody,
   CreateRoleBody,
@@ -117,6 +120,11 @@ export const api = {
 
   compute: () => request<Compute>("GET", "/api/compute"),
 
+  coordinator: () => request<CoordinatorView>("GET", "/api/coordinator"),
+  saveCoordinatorConfig: (config: CoordinatorConfig) => request<CoordinatorView>("PUT", "/api/coordinator/config", config),
+  addQuotaReading: (body: QuotaReadingBody) => request<CoordinatorView>("POST", "/api/coordinator/readings", body),
+  applyCoordinatorAction: (key: string) => request<CoordinatorView>("POST", "/api/coordinator/apply", { key }),
+
   feedback: (projectId: string) => request<FeedbackItem[]>("GET", `/api/projects/${projectId}/feedback`),
   addFeedback: (projectId: string, body: AddFeedbackBody) => request<FeedbackItem[]>("POST", `/api/projects/${projectId}/feedback`, body),
   updateFeedback: (id: string, status: FeedbackItem["status"]) => request<FeedbackItem>("PATCH", `/api/feedback/${id}`, { status }),
@@ -136,5 +144,6 @@ export const keys = {
   doc: (projectId: string, path: string) => ["doc", projectId, path] as const,
   inbox: ["inbox"] as const,
   compute: ["compute"] as const,
+  coordinator: ["coordinator"] as const,
   feedback: (projectId: string) => ["feedback", projectId] as const,
 };

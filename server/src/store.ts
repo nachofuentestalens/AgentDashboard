@@ -312,6 +312,17 @@ export class Store {
     return this.getSettings();
   }
 
+  // State the dashboard keeps for itself (the coordinator's config and readings) shares the settings
+  // table under its own keys, as JSON. getSettings ignores keys it does not know.
+  getStateJson<T>(key: string): T | null {
+    const row = this.db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+    return row?.value ? parseJson<T | null>(row.value, null) : null;
+  }
+
+  setStateJson(key: string, value: unknown): void {
+    this.db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, JSON.stringify(value));
+  }
+
   // ---- projects
 
   listProjects(): Project[] {
@@ -824,6 +835,15 @@ export class Store {
       .prepare("SELECT agent_id, SUM(cost_usd) AS total FROM runs WHERE agent_id IS NOT NULL AND ended_at >= ? GROUP BY agent_id")
       .all(since) as Row[];
     return new Map(rows.map((r) => [r.agent_id as string, Number(r.total)]));
+  }
+
+  // Reported tokens (cache included) of runs on a provider that ended since a time.
+  providerTokensSince(provider: Provider, since: string): number {
+    const rows = this.db.prepare("SELECT usage FROM runs WHERE provider = ? AND ended_at >= ?").all(provider, since) as Row[];
+    return rows.reduce((n, r) => {
+      const u = parseJson<Usage>(r.usage, emptyUsage());
+      return n + u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+    }, 0);
   }
 
   totalSpendSince(since: string): number {

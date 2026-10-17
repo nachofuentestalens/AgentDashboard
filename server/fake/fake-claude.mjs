@@ -47,6 +47,19 @@ const systemText = systemFile ? fs.readFileSync(systemFile, "utf8") : "";
 const who = systemText.match(/^You are (.+?), the (.+?) in the (.+?) department/);
 
 emit({ type: "system", subtype: "init", session_id: sessionId, model, cwd: process.cwd(), tools: [] });
+// [ratelimit:92] reports the session window 92% used, resetting in an hour.
+const rateLimit = prompt.match(/\[ratelimit:(\d+)\]/);
+if (rateLimit)
+  emit({
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: Number(rateLimit[1]) >= 100 ? "rejected" : "allowed",
+      rateLimitType: "five_hour",
+      utilization: Number(rateLimit[1]) / 100,
+      resetsAt: Math.floor(Date.now() / 1000) + 3600,
+    },
+    session_id: sessionId,
+  });
 
 let lastText = "";
 // Long echoes go out as one delta: word by word they take seconds and slow the tests down.

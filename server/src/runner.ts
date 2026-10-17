@@ -32,7 +32,8 @@ import { HttpError } from "./http.ts";
 import { editRules, type EditRules } from "./folders.ts";
 import { COMMIT_ID, git, workChanges } from "./git.ts";
 import { reviewPrompt, roleSystemPrompt, studioContext } from "./prompts.ts";
-import { EFFORT_COST_GUESS, plan, type QueuedRun, type SchedulerState } from "./scheduler.ts";
+import { limitWindowFromError, type RunCoordinator } from "./coordinator.ts";
+import { EFFORT_COST_GUESS, plan, type ProviderHold, type QueuedRun, type SchedulerState } from "./scheduler.ts";
 import { nextStage, type StageEvent } from "./stages.ts";
 import type { Store } from "./store.ts";
 import { efficiencyInstructions, extractHandoff, HANDOFF_REQUEST, totalTokens } from "./efficiency.ts";
@@ -98,6 +99,7 @@ export class Runner {
   private closed = false;
   private readonly recheck: NodeJS.Timeout;
   replies: ReplyHandler | null = null;
+  coordinator: RunCoordinator | null = null;
 
   constructor(
     private readonly store: Store,
@@ -330,16 +332,18 @@ export class Runner {
   }
 
   // Stops an active run, or takes a queued one out of the queue.
-  stop(runId: string): boolean {
+  // reason: recorded as the run's error, for stops the owner did not make.
+  stop(runId: string, reason?: string): boolean {
     const active = this.active.get(runId);
     if (active) {
       active.stopRequested = true;
+      if (reason) active.checkpointReason = reason;
       if (active.child?.pid) killTree(active.child);
       return true;
     }
     const run = this.store.getRun(runId);
     if (run?.status !== "queued") return false;
-    const finished = this.store.finishRun(runId, { status: "stopped", error: "Stopped by you." });
+    const finished = this.store.finishRun(runId, { status: "stopped", error: reason ?? "Stopped by you." });
     if (finished) this.bus.publish({ type: "run_updated", run: finished });
     this.publishTask(this.store.updateTask(run.taskId, { status: "idle", ...this.reviewCancelled(run) }));
     this.tick();
@@ -417,8 +421,26 @@ export class Runner {
       this.tickPending = false;
       if (this.closed) return;
       this.startIdleBacklog();
-      this.schedule();
+      let holds = new Map<Provider, ProviderHold>();
+      try {
+        holds = this.coordinator?.beforeSchedule() ?? holds;
+      } catch (error) {
+        // A coordinator fault must never stop the queue; it runs as if the coordinator were off.
+        console.error("Coordinator pass failed:", error);
+      }
+      this.schedule(holds);
     });
+  }
+
+  // The provider a task's next work run would use.
+  taskProvider(task: Task): Provider {
+    return this.choice(task).provider;
+  }
+
+  // The provider a queued or running run uses (a review uses its reviewer's choice).
+  runProvider(run: Run): Provider {
+    const task = this.store.getTask(run.taskId);
+    return task ? this.choice(this.actorTask(task, run)).provider : run.provider;
   }
 
   // Projects that opt in: a staffed role with nothing queued or running starts its top backlog
@@ -644,7 +666,7 @@ export class Runner {
   }
 
   // One scheduling pass: start what may start, and tell queued runs why they wait.
-  private schedule(): void {
+  private schedule(holds: Map<Provider, ProviderHold>): void {
     const queuedRuns = this.store.runsWithStatus("queued");
     if (queuedRuns.length === 0) return;
 
@@ -681,8 +703,9 @@ export class Runner {
         if (task) this.publishTask(this.store.updateTask(task.id, { status: "idle", ...this.reviewCancelled(run) }));
         continue;
       }
-      const { effort } = this.choice(this.actorTask(task, run));
+      const { effort, provider } = this.choice(this.actorTask(task, run));
       queued.push({
+        provider,
         runId: run.id,
         projectId: task.projectId,
         roleId: role.id,
@@ -708,6 +731,7 @@ export class Runner {
       frozenProjects: new Set(this.store.openEmergencies().map((t) => t.projectId)),
       active: [...this.active.values()].map((a) => ({ runId: a.runId, departmentId: a.departmentId, canEdit: a.canEdit })),
       queued,
+      providerHolds: holds,
     };
     const result = plan(state);
 
@@ -881,6 +905,10 @@ export class Runner {
         const updated = this.store.getRun(run.id);
         if (updated) this.bus.publish({ type: "run_updated", run: updated });
       }
+      if (event.kind === "rate_limit") {
+        const { kind: _, ...reading } = event;
+        this.coordinator?.observe({ provider, ...reading, source: "cli" });
+      }
       if (event.kind === "tool_result") pendingTools.delete(event.toolUseId);
       if (event.kind === "tool_result" && pendingTools.size === 0 && !active.stopRequested) {
         const reason = this.budgetReason(this.store.getTask(task.id) ?? task);
@@ -962,6 +990,8 @@ export class Runner {
         error,
         sessionId: result?.sessionId ?? sessionId,
       });
+      const limited = status === "failed" ? limitWindowFromError(error) : null;
+      if (limited) this.coordinator?.observe({ provider, window: limited, usedPercent: 100, resetsAt: null, rejected: true, source: "error" });
       const routingText = [...events.flatMap((e) => (e.kind === "text" ? [e.text] : [])), reply].join("\n");
       const review = run.purpose === "work" ? parseModelReview(routingText) : null;
       const requestedSwitch = status === "succeeded" && review?.action === "switch";

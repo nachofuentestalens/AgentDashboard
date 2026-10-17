@@ -98,6 +98,9 @@ export function useLiveUpdates(qc: QueryClient): Connection {
           qc.removeQueries({ queryKey: keys.task(push.taskId) });
           void qc.invalidateQueries({ queryKey: keys.tasks(push.projectId) });
           break;
+        case "coordinator_changed":
+          void qc.invalidateQueries({ queryKey: keys.coordinator });
+          break;
         case "projects_changed":
           void qc.invalidateQueries({ queryKey: keys.projects });
           void qc.invalidateQueries({ queryKey: ["project"] });

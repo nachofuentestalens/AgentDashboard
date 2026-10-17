@@ -27,6 +27,7 @@ import { Runner } from "./runner.ts";
 import { Store } from "./store.ts";
 import { Studio } from "./studio.ts";
 import { registerStudioRoutes } from "./studio-routes.ts";
+import { Coordinator, registerCoordinatorRoutes } from "./coordination.ts";
 
 export interface AppOptions {
   dataDir: string;
@@ -68,6 +69,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   const bus = new Bus();
   const runner = new Runner(store, bus, options.dataDir, options.launchers);
   const studio = new Studio(store, bus, runner);
+  const coordinator = new Coordinator(store, bus, runner);
   store.markInterrupted();
   const modelCatalog = await loadModelCatalog(options.dataDir, store.getSettings().codexPath, options.launchers?.codex);
   runner.modelOptions = modelCatalog.presets;
@@ -303,6 +305,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   });
 
   registerStudioRoutes(app, { store, bus, runner, studio });
+  registerCoordinatorRoutes(app, coordinator);
 
   // ---- live updates
 

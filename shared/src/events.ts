@@ -1,4 +1,4 @@
-import type { Run, Task, Usage } from "./models.ts";
+import type { QuotaWindow, Run, Task, Usage } from "./models.ts";
 
 // Provider-neutral events a run produces. The parser turns Claude's stream-json into these; they are
 // stored one per line in the run's JSONL file and pushed live to the browser.
@@ -21,6 +21,8 @@ export type AgentEvent =
       durationMs: number;
       numTurns: number;
     }
+  // The provider reported a usage limit window (see the coordinator).
+  | { kind: "rate_limit"; window: QuotaWindow; usedPercent: number | null; resetsAt: string | null; rejected: boolean }
   | { kind: "stderr"; text: string }
   | { kind: "error"; message: string }
   // Written by the dashboard, not the agent: what it did with the reply (a task created, a
@@ -44,4 +46,5 @@ export type ServerPush =
   | { type: "studio_changed"; projectId: string }
   | { type: "inbox_changed" }
   | { type: "docs_changed"; projectId: string }
-  | { type: "feedback_changed"; projectId: string };
+  | { type: "feedback_changed"; projectId: string }
+  | { type: "coordinator_changed" };

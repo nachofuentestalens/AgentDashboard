@@ -112,7 +112,68 @@ export function parseClaudeLine(line: string): AgentEvent[] {
         },
       ];
 
+    case "rate_limit_event": {
+      const event = claudeRateLimit(data.rate_limit_info);
+      return event ? [event] : [];
+    }
+
     default:
       return [];
   }
+}
+
+// Unix seconds, milliseconds or an ISO string → ISO, else null.
+export function toIso(v: unknown): string | null {
+  if (typeof v === "number" && Number.isFinite(v) && v > 0) return new Date(v > 1e12 ? v : v * 1000).toISOString();
+  if (typeof v === "string" && v && !Number.isNaN(Date.parse(v))) return new Date(v).toISOString();
+  return null;
+}
+
+const percent = (v: unknown): number | null => {
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return null;
+  // Utilization comes as a fraction; percentages above 1 are already scaled.
+  return Math.min(100, v <= 1 ? v * 100 : v);
+};
+
+// Claude Code reports each limit window it checked. Field names have changed between CLI versions,
+// so every one is optional; a window it does not name is ignored.
+function claudeRateLimit(info: unknown): AgentEvent | null {
+  if (!isObject(info)) return null;
+  const type = str(info.rateLimitType ?? info.rate_limit_type);
+  const window = type === "five_hour" ? "session" : type.startsWith("seven_day") ? "weekly" : null;
+  if (!window) return null;
+  return {
+    kind: "rate_limit",
+    window,
+    usedPercent: percent(info.utilization ?? info.usedPercent ?? info.used_percent),
+    resetsAt: toIso(info.resetsAt ?? info.resets_at),
+    rejected: info.status === "rejected",
+  };
+}
+
+// Codex reports `rate_limits: { primary, secondary }` with its token counts; where it sits in the
+// event has moved between versions, so it is looked for at the top level and one level down.
+export function codexRateLimits(data: Record<string, unknown>, now = Date.now()): AgentEvent[] {
+  const holder = [data, ...Object.values(data)].find((v) => isObject(v) && isObject(v.rate_limits)) as Json | undefined;
+  if (!holder) return [];
+  const limits = holder.rate_limits as Json;
+  const events: AgentEvent[] = [];
+  for (const [name, fallback] of [
+    ["primary", "session"],
+    ["secondary", "weekly"],
+  ] as const) {
+    const w = limits[name];
+    if (!isObject(w)) continue;
+    const minutes = num(w.window_minutes);
+    const resetsIn = num(w.resets_in_seconds);
+    events.push({
+      kind: "rate_limit",
+      window: minutes ? (minutes >= 24 * 60 ? "weekly" : "session") : fallback,
+      // Always a percentage here, so 1 means 1%, not a full window.
+      usedPercent: typeof w.used_percent === "number" && w.used_percent >= 0 ? Math.min(100, w.used_percent) : null,
+      resetsAt: toIso(w.resets_at) ?? (resetsIn ? new Date(now + resetsIn * 1000).toISOString() : null),
+      rejected: false,
+    });
+  }
+  return events;
 }

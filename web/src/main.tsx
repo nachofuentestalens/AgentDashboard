@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, RouterProvider, useParams } from "react-router";
 import { Layout } from "./components/Layout.tsx";
 import { ComputePage } from "./pages/ComputePage.tsx";
+import { CoordinatorPage } from "./pages/CoordinatorPage.tsx";
 import { HomePage } from "./pages/HomePage.tsx";
 import { InboxPage } from "./pages/InboxPage.tsx";
 import { ProjectPage, type ProjectTab } from "./pages/ProjectPage.tsx";
@@ -40,6 +41,7 @@ const router = createBrowserRouter([
       { path: "/tasks/:taskId", element: <TaskRoute /> },
       { path: "/inbox", element: <InboxPage /> },
       { path: "/compute", element: <ComputePage /> },
+      { path: "/coordinator", element: <CoordinatorPage /> },
       { path: "/settings", element: <SettingsPage /> },
       { path: "*", element: <HomePage /> },
     ],

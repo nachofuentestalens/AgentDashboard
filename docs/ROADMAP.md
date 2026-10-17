@@ -93,3 +93,10 @@ Demo checklist (real Claude Code, on Windows):
 - [x] Smaller document context, unchanged-catalog suppression and economical defaults
 - [x] Provider integration and browser regression coverage
 - [x] Discover the first five visible Codex models on every server startup; share across selectors and retain a last-known catalog on failure
+
+## Project coordinator
+
+- [x] Coordinator tab: per-provider session and weekly usage from CLI rate-limit reports, owner readings, limit failures and optional token caps
+- [x] Owner reserve, conserve band and weekly pacing; queued work held by provider and priority (auto mode) with "run anyway"
+- [x] Pause running role work inside the reserve, resume it after the reset, start backlog work before unused session usage resets, move held work to the other provider
+- [ ] Read Claude's and ChatGPT's usage pages directly when their CLIs expose them, instead of owner readings
