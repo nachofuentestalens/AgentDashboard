@@ -231,8 +231,16 @@ count includes them.
 - **Start next when idle**: when a role has no running task, the scheduler may start the top `backlog` task of that role. This is
   the same as today's queue behaviour, but opt-in per project because some owners want to choose.
 
-Implemented as project settings `autoReview`, `autoContinueSteps` (0 to 20, 0 is off) and `startNextWhenIdle`. The count of automatic
-continues lives on the task (`autoContinues`) and resets whenever the owner sends a message or moves the stage.
+- **Hands-off delivery** (`autoApprove`): the owner delegates approval to the agent reviewer. When the latest review is an agent
+  `pass` on the task's current checkpoint, the server approves the task and, with a managed baseline, integrates it exactly as the
+  owner's Preview integration → Approve would, once no agent runs in the project (queued work there holds until it lands). A
+  `changes` verdict sends the findings back to the author automatically, at most 3 times in a row. A failed integration (conflict,
+  oversized diff, blocker) leaves the task in `needs_review` with a notice for the owner.
+
+Implemented as project settings `autoReview`, `autoContinueSteps` (0 to 20, 0 is off), `startNextWhenIdle` and `autoApprove`. The
+count of automatic continues and fixes lives on the task (`autoContinues`) and resets whenever the owner sends a message or moves the
+stage. Each agent review records the checkpoint it read (`task_reviews.reviewed_commit`): auto-review skips a finished step that
+changed no files since a passed review, so a status question to a task in `needs_review` does not start another review.
 
 ## Rollout
 

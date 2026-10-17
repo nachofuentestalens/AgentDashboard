@@ -198,19 +198,47 @@ describe("task stages", () => {
     const { app, projectId, qa } = await roleProject();
     await api(app, "PATCH", `/api/projects/${projectId}`, { autoReview: true, autoContinueSteps: 1 });
     const task = await newTask(app, projectId, { roleId: qa.id, message: "work [step-done] [review-pass]" });
-    // work → review (pass) → work (continued) → review (pass), then it stops: the second step gave no next step.
-    await waitFor(() => app.store.listTaskReviews(task.id).length === 2, 15_000);
+    // work → review (pass) → work (continued), then it stops: the second step gave no next step, and
+    // it changed no files, so the passed review still covers it.
+    await waitFor(() => app.store.listRuns(task.id).length === 3, 15_000);
     const done = await stepFinished(app, task.id);
-    expect(app.store.listRuns(task.id).map((r) => r.purpose)).toEqual(["work", "review", "work", "review"]);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(app.store.listRuns(task.id).map((r) => r.purpose)).toEqual(["work", "review", "work"]);
     expect(done.autoContinues).toBe(1);
     expect(app.store.listMessages(task.id).filter((m) => m.role === "user")[2]!.text).toBe("Continue with: Tune the dash cooldown.");
 
     // The owner acting resets the count.
     await act(app, task.id, { action: "continue", text: "one more" });
-    await waitFor(() => app.store.listRuns(task.id).length >= 5);
+    await waitFor(() => app.store.listRuns(task.id).length >= 4);
     expect(app.store.getTask(task.id)!.autoContinues).toBe(0);
-    await waitFor(() => app.store.listTaskReviews(task.id).length === 3, 15_000);
     await stepFinished(app, task.id);
+    expect(app.store.listTaskReviews(task.id)).toHaveLength(1);
+  });
+
+  it("approves a passed task and starts the next one without the owner (hands-off delivery)", async () => {
+    const { app, projectId, qa } = await roleProject();
+    const first = await newTask(app, projectId, { roleId: qa.id, title: "First check", priority: 9, message: "work [review-pass]" });
+    const second = await newTask(app, projectId, { roleId: qa.id, title: "Second check" });
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoReview: true, startNextWhenIdle: true, autoApprove: true });
+    await waitFor(() => app.store.getTask(first.id)!.stage === "approved", 15_000);
+    expect(app.store.listRuns(first.id).map((r) => r.purpose)).toEqual(["work", "review"]);
+    expect(app.store.listTaskReviews(first.id).map((r) => [r.reviewer === "owner" ? "owner" : "agent", r.verdict])).toEqual([
+      ["agent", "pass"],
+      ["owner", "approved"],
+    ]);
+    await waitFor(() => app.store.listRuns(second.id).length > 0, 15_000);
+  });
+
+  it("sends review findings back a bounded number of times under hands-off delivery", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoReview: true, autoApprove: true });
+    const task = await newTask(app, projectId, { roleId: qa.id, message: "work [review-changes]" });
+    // The fake reviewer always asks for changes: three automatic fixes, then the owner decides.
+    await waitFor(() => app.store.listTaskReviews(task.id).length === 4 && app.store.getTask(task.id)!.status === "idle", 30_000);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(app.store.listRuns(task.id).map((r) => r.purpose)).toEqual(["work", "review", "work", "review", "work", "review", "work", "review"]);
+    expect(app.store.getTask(task.id)!.stage).toBe("changes_requested");
+    expect(app.store.listMessages(task.id).filter((m) => m.role === "user")[2]!.text).toMatch(/^Address these review findings:/);
   });
 
   it("starts the top backlog task of an idle role when the project opts in", async () => {

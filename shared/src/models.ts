@@ -96,6 +96,8 @@ export interface Project {
   // 0: off. Else how many steps in a row may continue after a passed agent review.
   autoContinueSteps: number;
   startNextWhenIdle: boolean;
+  // A passed agent review approves the task and integrates it into the baseline without the owner.
+  autoApprove: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -133,6 +135,8 @@ export interface TaskReview {
   reviewer: string;
   verdict: "pass" | "changes" | "approved";
   findings: string[];
+  // The task checkpoint an agent review looked at; null for owner reviews and older rows.
+  commit?: string | null;
   createdAt: string;
 }
 
