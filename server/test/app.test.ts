@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Project, Run, StampedEvent, TaskDetail } from "@ad/shared";
 import type { App } from "../src/app.ts";
 import { api, gitRepo, newProject, newTask, runFinished, tempDir, testApp, waitFor } from "./helpers.ts";
@@ -68,6 +68,25 @@ describe("projects", () => {
 });
 
 describe("chat tasks", () => {
+  it("keeps a failed launch visible and retryable instead of leaving an active ghost run", async () => {
+    const app = await start();
+    const projectId = await newProject(app);
+    const update = vi.spyOn(app.store, "updateTask").mockImplementation(() => {
+      throw new Error("Simulated task update failure during launch");
+    });
+    const created = await api<TaskDetail["task"]>(app, "POST", `/api/projects/${projectId}/tasks`, { message: "Hello" });
+    expect(created.status).toBe(201);
+    expect(created.body.status).toBe("failed");
+    const run = app.store.listRuns(created.body.id)[0]!;
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("Simulated task update failure");
+    expect(app.runner.activeCount()).toBe(0);
+    expect(app.store.listTasks(projectId)).toHaveLength(1);
+    update.mockRestore();
+    const retry = await api<Run>(app, "POST", `/api/runs/${run.id}/retry`);
+    expect((await runFinished(app, retry.body.id)).status).toBe("succeeded");
+  });
+
   it("runs the first message, then resumes the same session for the next", async () => {
     const app = await start();
     const projectId = await newProject(app);
@@ -86,7 +105,8 @@ describe("chat tasks", () => {
     const events = (await api<StampedEvent[]>(app, "GET", `/api/runs/${first.id}/events`)).body;
     expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i));
     expect(events.some((e) => e.event.kind === "tool_use")).toBe(true);
-    expect(events.at(-1)?.event.kind).toBe("result");
+    expect(events.some((e) => e.event.kind === "result")).toBe(true);
+    expect(events.at(-1)?.event).toMatchObject({ kind: "notice", text: expect.stringContaining("Saved local checkpoint") });
 
     const second = await api<{ run: Run }>(app, "POST", `/api/tasks/${task.id}/messages`, { text: "Now make the Warrior tankier" });
     expect(second.status).toBe(201);

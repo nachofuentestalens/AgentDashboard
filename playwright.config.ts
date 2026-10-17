@@ -8,7 +8,9 @@ const dataDir = path.join(os.tmpdir(), `agent-dashboard-e2e-${Date.now()}`);
 
 export default defineConfig({
   testDir: "e2e",
-  timeout: 30_000,
+  timeout: 60_000,
+  // Assertions often wait for a queued fake agent run; CI's Windows runners take well over the 5 s default.
+  expect: { timeout: 20_000 },
   workers: 1,
   // On CI, failures also appear as annotations on the run.
   reporter: process.env.CI ? [["github"], ["list"]] : "list",

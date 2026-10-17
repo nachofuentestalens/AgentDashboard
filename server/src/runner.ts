@@ -7,6 +7,7 @@ import {
   createCodexParser,
   finalText,
   parseClaudeLine,
+  parseReplyBlocks,
   PROVIDERS,
   MODEL_PRESETS,
   type ModelOption,
@@ -16,9 +17,12 @@ import {
   type Effort,
   type Message,
   type Provider,
+  type Role,
   type Run,
   type StampedEvent,
   type Task,
+  type ReplyBlock,
+  type TaskAction,
 } from "@ad/shared";
 import type { Bus } from "./bus.ts";
 import { buildArgs, CLAUDE_CLI, resolveLauncher, systemPrompt, type Launcher } from "./claude.ts";
@@ -26,11 +30,15 @@ import { buildCodexArgs, CODEX_CLI } from "./codex.ts";
 import { listDocs } from "./docs.ts";
 import { HttpError } from "./http.ts";
 import { editRules, type EditRules } from "./folders.ts";
-import { roleSystemPrompt, studioContext } from "./prompts.ts";
+import { COMMIT_ID, git, workChanges } from "./git.ts";
+import { reviewPrompt, roleSystemPrompt, studioContext } from "./prompts.ts";
 import { EFFORT_COST_GUESS, plan, type QueuedRun, type SchedulerState } from "./scheduler.ts";
+import { nextStage, type StageEvent } from "./stages.ts";
 import type { Store } from "./store.ts";
 import { efficiencyInstructions, extractHandoff, HANDOFF_REQUEST, totalTokens } from "./efficiency.ts";
 import { modelRoutingInstructions, parseModelReview, validateModelReview } from "./model-routing.ts";
+import { Workspaces } from "./workspaces.ts";
+import { Github } from "./github.ts";
 
 export class RunnerError extends HttpError {}
 
@@ -39,9 +47,18 @@ export interface Notice {
   text: string;
 }
 
-// What the studio does with a finished reply (its task, proposal and question blocks).
+export interface ReplyOutcome {
+  notices: Notice[];
+  waiting: boolean;
+  // The role task's last step block, null without one.
+  step: Extract<ReplyBlock, { type: "step" }> | null;
+  // The steps still to do, including the one this reply finishes, when the agent gave a plan.
+  plan: string[] | null;
+}
+
+// What the studio does with a finished reply (its task, proposal, question and step blocks).
 export interface ReplyHandler {
-  afterReply(task: Task, run: Run, reply: string): { notices: Notice[]; waiting: boolean };
+  afterReply(task: Task, run: Run, reply: string): ReplyOutcome;
 }
 
 interface ActiveRun {
@@ -74,6 +91,9 @@ export class Runner {
   private readonly active = new Map<string, ActiveRun>();
   private readonly runsDir: string;
   private readonly promptsDir: string;
+  private readonly workspaces: Workspaces;
+  private readonly github: Github;
+  private readonly workspaceBusy = new Set<string>();
   private tickPending = false;
   private closed = false;
   private readonly recheck: NodeJS.Timeout;
@@ -88,6 +108,8 @@ export class Runner {
   ) {
     this.runsDir = path.join(dataDir, "runs");
     this.promptsDir = path.join(dataDir, "prompts");
+    this.workspaces = new Workspaces(store, path.join(dataDir, "worktrees"), () => !this.closed);
+    this.github = new Github(store, this.workspaces, () => !this.closed);
     fs.mkdirSync(this.runsDir, { recursive: true });
     fs.mkdirSync(this.promptsDir, { recursive: true });
     for (const run of this.store.runsNeedingToolCounts()) {
@@ -99,12 +121,20 @@ export class Runner {
   }
 
   isTaskRunning(taskId: string): boolean {
+    if (this.workspaceBusy.has(taskId)) return true;
     for (const a of this.active.values()) if (a.taskId === taskId) return true;
     return false;
   }
 
   activeCount(): number {
     return this.active.size;
+  }
+
+  private stagePatch(roleId: Task["roleId"], stage: Task["stage"], event: StageEvent): Partial<Pick<Task, "stage">> {
+    if (!roleId || !stage) return {};
+    const transition = nextStage(stage, event);
+    // A refused transition keeps the existing stage without interrupting run cleanup.
+    return transition.error ? {} : { stage: transition.stage };
   }
 
   activeRuns(): { runId: string; taskId: string; agentId: string | null; departmentId: string | null; canEdit: boolean }[] {
@@ -135,9 +165,15 @@ export class Runner {
   }
 
   // Adds the user's message to the conversation and starts the agent on it, or queues it.
-  send(taskId: string, text: string): { message: Message; run: Run } {
+  // auto: the dashboard continues on its own, which counts against the project's step limit.
+  send(taskId: string, text: string, auto = false): { message: Message; run: Run } {
     let task = this.requireIdleTask(taskId);
+    if (task.canEdit && this.store.getWorkspace(taskId)?.mergeCommit)
+      throw new RunnerError("This task has been merged. Start a new task for follow-up changes.", 409);
+    if (task.stage === "closed") throw new RunnerError("This task is closed. Reopen it before sending a message.", 409);
     this.checkBudget(task);
+    // The owner stepped in, so automatic continuation starts counting again.
+    if (!auto && task.autoContinues > 0) task = this.store.updateTask(task.id, { autoContinues: 0 })!;
     if (task.autoCompact && task.handoff && task.handoffRunId === this.store.listRuns(taskId).at(-1)?.id) {
       task = this.compact(taskId, task.handoff);
     }
@@ -146,6 +182,60 @@ export class Runner {
     const message = this.store.addMessage({ taskId, role: "user", text, runId: null });
     const run = task.roleId ? this.enqueue(task, message, null) : this.startNow(task, message, text);
     return { message, run };
+  }
+
+  // The owner moves a role task through its stages. Moves that start work send a message, and the
+  // run start applies the stage change; the others only change the stage.
+  stageAction(taskId: string, action: Exclude<TaskAction, { action: "review" }>): Task {
+    const task = this.requireIdleTask(taskId);
+    if (!task.roleId || !task.stage) throw new RunnerError("Only a role's task has stages. Use Mark done for a chat.", 400);
+    const check = nextStage(task.stage, action.action);
+    // Start is also how a run resumes in progress work, but as an owner move it begins backlog work.
+    if (check.error || (action.action === "start" && task.stage !== "backlog")) throw new RunnerError(check.error ?? "Start is only for backlog tasks.", 409);
+
+    switch (action.action) {
+      case "start":
+      case "continue": {
+        const text =
+          action.text ??
+          (task.nextStep
+            ? `Continue with: ${task.nextStep}`
+            : action.action === "start"
+              ? `Start on this task: ${task.title}`
+              : "Continue with the next step.");
+        this.send(task.id, text);
+        return this.store.getTask(task.id)!;
+      }
+      case "fix": {
+        const findings =
+          this.store
+            .listTaskReviews(task.id)
+            .filter((r) => r.verdict === "changes")
+            .at(-1)?.findings ?? [];
+        const text = action.text ?? ["Address these review findings:", ...findings.map((f) => `- ${f}`)].join("\n");
+        this.send(task.id, text);
+        return this.store.getTask(task.id)!;
+      }
+      case "request_changes":
+        this.store.addTaskReview({ taskId: task.id, runId: null, reviewer: "owner", verdict: "changes", findings: [action.text] });
+        break;
+      case "approve": {
+        const open = this.store.openChildTasks(task.id);
+        if (open.length && !action.force)
+          throw new RunnerError(`Delegated work is still open: ${open.map((t) => t.title).join(", ")}. Approve anyway to continue.`, 409);
+        this.store.addTaskReview({ taskId: task.id, runId: null, reviewer: "owner", verdict: "approved", findings: [] });
+        const workspace = this.store.getWorkspace(task.id);
+        if (workspace) this.store.saveWorkspace({ ...workspace, approvedCommit: workspace.checkpointCommit });
+        break;
+      }
+    }
+    // Closing answers nothing: the open question goes away with it.
+    const updated = this.store.updateTask(task.id, { stage: check.stage, autoContinues: 0, ...(check.stage === "closed" ? { question: null } : {}) })!;
+    this.publishTask(updated);
+    this.bus.publish({ type: "inbox_changed" });
+    this.bus.publish({ type: "studio_changed", projectId: updated.projectId });
+    this.tick();
+    return updated;
   }
 
   usageSummary(taskId: string) {
@@ -175,8 +265,15 @@ export class Runner {
     let current: Task | null = task;
     while (current) {
       const usage = this.usageSummary(current.id);
-      if ((current.tokenBudget !== null && usage.tokens >= current.tokenBudget) || (current.toolBudget !== null && usage.toolCalls >= current.toolBudget)) {
-        return `Usage checkpoint reached for "${current.title}". Review the work and raise its task allowance to continue; a compact handoff does not reset usage.`;
+      // Name the exact limit and the value to beat: raising the wrong one leaves the task blocked.
+      const hit: string[] = [];
+      if (current.tokenBudget !== null && usage.tokens >= current.tokenBudget)
+        hit.push(`token allowance (${usage.tokens.toLocaleString("en-US")} used of ${current.tokenBudget.toLocaleString("en-US")})`);
+      if (current.toolBudget !== null && usage.toolCalls >= current.toolBudget)
+        hit.push(`tool-call allowance (${usage.toolCalls} used of ${current.toolBudget})`);
+      if (hit.length) {
+        const where = current.id === task.id ? "this task" : `the parent task "${current.title}" (open that task to change it)`;
+        return `Usage checkpoint reached: the ${hit.join(" and the ")} of ${where}. Open "Context & usage" above the conversation, set that allowance above current usage (or clear it for unlimited), click "Save usage controls", then send a message or Retry. A compact handoff does not reset usage.`;
       }
       current = current.parentTaskId ? this.store.getTask(current.parentTaskId) : null;
     }
@@ -209,13 +306,18 @@ export class Runner {
   }
 
   // Runs the message of a run that did not finish again, as a new run.
-  retry(runId: string): Run {
+  async retry(runId: string): Promise<Run> {
     const previous = this.store.getRun(runId);
     if (!previous) throw new RunnerError("Run not found.", 404);
     if (previous.status === "running" || previous.status === "queued" || previous.status === "succeeded")
       throw new RunnerError("Only a failed, stopped or interrupted run can be retried.", 409);
     const latest = this.store.listRuns(previous.taskId).at(-1);
     if (latest?.id !== previous.id) throw new RunnerError("Only the latest run of a task can be retried.", 409);
+    // A review starts over with the same reviewer and a fresh diff.
+    if (previous.purpose === "review") {
+      await this.startReview(previous.taskId, previous.roleId ?? undefined);
+      return this.store.listRuns(previous.taskId).at(-1)!;
+    }
     const task = this.requireIdleTask(previous.taskId);
     this.checkBudget(task);
     const message = this.store.getMessage(previous.messageId);
@@ -239,7 +341,7 @@ export class Runner {
     if (run?.status !== "queued") return false;
     const finished = this.store.finishRun(runId, { status: "stopped", error: "Stopped by you." });
     if (finished) this.bus.publish({ type: "run_updated", run: finished });
-    this.publishTask(this.store.updateTask(run.taskId, { status: "idle" }));
+    this.publishTask(this.store.updateTask(run.taskId, { status: "idle", ...this.reviewCancelled(run) }));
     this.tick();
     return true;
   }
@@ -258,6 +360,48 @@ export class Runner {
     for (const runId of this.active.keys()) this.stop(runId);
   }
 
+  async checkpointTask(taskId: string) {
+    this.requireIdleTask(taskId);
+    if (!this.store.getWorkspace(taskId)) throw new RunnerError("This task has no isolated worktree yet.", 409);
+    this.workspaceBusy.add(taskId);
+    try {
+      const workspace = await this.workspaces.checkpoint(taskId, "Owner checkpoint");
+      if (workspace?.error) throw new RunnerError(workspace.error, 409);
+      return await this.github.publish(taskId);
+    } finally {
+      this.workspaceBusy.delete(taskId);
+    }
+  }
+
+  async publishWorkspace(taskId: string) {
+    this.requireIdleTask(taskId);
+    if (!this.store.getWorkspace(taskId)) throw new RunnerError("This task has no worktree yet.", 409);
+    this.workspaceBusy.add(taskId);
+    try {
+      const workspace = await this.github.publish(taskId);
+      if (workspace?.publishError || workspace?.error) throw new RunnerError(workspace.publishError ?? workspace.error!, 409);
+      return workspace;
+    } finally {
+      this.workspaceBusy.delete(taskId);
+    }
+  }
+
+  async mergeWorkspace(taskId: string) {
+    const task = this.requireIdleTask(taskId);
+    if (task.roleId && task.stage !== "approved") throw new RunnerError("Approve this task before merging its pull request.", 409);
+    const workspace = this.store.getWorkspace(taskId);
+    if (task.roleId && (!workspace?.approvedCommit || workspace.approvedCommit !== workspace.checkpointCommit))
+      throw new RunnerError("The checkpoint changed since approval. Return the task to review and approve the current changes before merging.", 409);
+    this.workspaceBusy.add(taskId);
+    try {
+      return await this.github.merge(taskId);
+    } catch (error) {
+      throw new RunnerError((error as Error).message, 409);
+    } finally {
+      this.workspaceBusy.delete(taskId);
+    }
+  }
+
   close(): void {
     this.closed = true;
     clearInterval(this.recheck);
@@ -271,8 +415,35 @@ export class Runner {
     this.tickPending = true;
     setImmediate(() => {
       this.tickPending = false;
-      if (!this.closed) this.schedule();
+      if (this.closed) return;
+      this.startIdleBacklog();
+      this.schedule();
     });
+  }
+
+  // Projects that opt in: a staffed role with nothing queued or running starts its top backlog
+  // task, as the owner's Start would.
+  private startIdleBacklog(): void {
+    const projects = this.store.listProjects().filter((p) => p.startNextWhenIdle);
+    if (projects.length === 0) return;
+    const busy = new Set([...this.store.runsWithStatus("queued"), ...this.store.runsWithStatus("running")].map((r) => r.roleId));
+    const staffed = new Set(
+      this.store
+        .listAgents()
+        .filter((a) => !a.paused)
+        .map((a) => a.roleId),
+    );
+    for (const project of projects) {
+      for (const task of this.store.backlogTasks(project.id)) {
+        if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId)) continue;
+        busy.add(task.roleId);
+        try {
+          this.stageAction(task.id, { action: "start" });
+        } catch {
+          // A budget or a removed role holds it; the owner sees the task still in the backlog.
+        }
+      }
+    }
   }
 
   private requireIdleTask(taskId: string): Task {
@@ -295,8 +466,9 @@ export class Runner {
     return { ...choice, roleCanEdit: role ? role.canEdit : true };
   }
 
-  private enqueue(task: Task, message: Message, prompt: string | null, purpose: Run["purpose"] = "work"): Run {
-    const role = this.store.getRole(task.roleId!);
+  // roleId: the role whose agent runs it, the task's own except for reviews.
+  private enqueue(task: Task, message: Message, prompt: string | null, purpose: Run["purpose"] = "work", roleId = task.roleId): Run {
+    const role = this.store.getRole(roleId!);
     if (!role) throw new RunnerError("This task's role no longer exists.", 409);
     const { provider, model, effort } = this.choice(task);
     const run = this.store.createRun({
@@ -314,9 +486,143 @@ export class Runner {
     this.store.setRunPurpose(run.id, purpose);
     run.purpose = purpose;
     this.bus.publish({ type: "run_updated", run });
-    this.publishTask(this.store.updateTask(task.id, { status: "queued" }));
+    // Queued work already belongs to the agent, so the board shows it as in progress.
+    const stage =
+      purpose === "work"
+        ? this.stagePatch(task.roleId, task.stage, "start")
+        : purpose === "review"
+          ? this.stagePatch(task.roleId, task.stage, "review_start")
+          : {};
+    this.publishTask(this.store.updateTask(task.id, { status: "queued", ...stage }));
+    // A step that was waiting for review leaves the inbox.
+    if (stage.stage && stage.stage !== task.stage) this.bus.publish({ type: "inbox_changed" });
+    if (purpose === "work" && task.roleId && !task.baseCommit) void this.recordBaseCommit(task);
     this.tick();
     return run;
+  }
+
+  // Reviews diff the work against the commit it started from.
+  private async recordBaseCommit(task: Task) {
+    const project = this.store.getProject(task.projectId);
+    if (!project) return;
+    const head = await git(project.repoPath, ["rev-parse", "HEAD"]);
+    if (this.closed || !head.ok || !COMMIT_ID.test(head.stdout)) return;
+    if (this.store.getTask(task.id)?.baseCommit === null) this.store.updateTask(task.id, { baseCommit: head.stdout });
+  }
+
+  // A review run works as the reviewer role: read-only, with that role's model choice, in a fresh
+  // session of its own. The task's session and model choice stay the author's.
+  private actorTask(task: Task, run: Pick<Run, "purpose" | "roleId">): Task {
+    if (run.purpose !== "review") return task;
+    return {
+      ...task,
+      roleId: run.roleId,
+      provider: null,
+      model: null,
+      effort: null,
+      canEdit: false,
+      sessionId: null,
+      sessionStarted: false,
+      sessionProvider: null,
+      handoff: null,
+    };
+  }
+
+  // First match wins: the one-off choice, the task's reviewer, the role's default, the role itself.
+  // Only the owner sets these; a reviewer outside the project is ignored.
+  private resolveReviewer(task: Task, roleId?: string): Role {
+    const inProject = (id: string | null | undefined) => {
+      const role = id ? this.store.getRole(id) : null;
+      return role?.projectId === task.projectId ? role : null;
+    };
+    if (roleId) {
+      const chosen = inProject(roleId);
+      if (!chosen) throw new RunnerError("The reviewer must be a role in this project.", 400);
+      return chosen;
+    }
+    const author = inProject(task.roleId);
+    const reviewer = inProject(task.reviewerRoleId) ?? inProject(author?.reviewerRoleId) ?? author;
+    if (!reviewer) throw new RunnerError("This task's role no longer exists.", 409);
+    return reviewer;
+  }
+
+  // The owner asks an agent to review the finished step. The prompt is the server's: the request,
+  // the step summary and the diff since the task began.
+  async startReview(taskId: string, roleId?: string): Promise<Task> {
+    const check = (task: Task) => {
+      if (!task.roleId || !task.stage) throw new RunnerError("Only a role's task can be reviewed.", 400);
+      const move = nextStage(task.stage, "review_start");
+      if (move.error) throw new RunnerError(move.error, 409);
+    };
+    const before = this.requireIdleTask(taskId);
+    check(before);
+    this.checkBudget(before);
+    const reviewer = this.resolveReviewer(before, roleId);
+    const project = this.store.getProject(before.projectId);
+    if (!project) throw new RunnerError("Project not found.", 404);
+    const workspace = this.store.getWorkspace(taskId);
+    if (workspace) await this.workspaces.verify(workspace);
+    const changes = await workChanges(workspace?.path ?? project.repoPath, workspace?.baseCommit ?? before.baseCommit);
+    // Things may have moved while git ran.
+    const task = this.requireIdleTask(taskId);
+    check(task);
+    const request = this.store.listMessages(task.id).find((m) => m.role === "user")?.text ?? task.title;
+    const prompt = reviewPrompt({ title: task.title, request, summary: task.stepSummary, ...changes });
+    const message = this.store.addMessage({ taskId, role: "user", text: `Review requested from ${reviewer.name}.`, runId: null });
+    this.enqueue(task, message, prompt, "review", reviewer.id);
+    return this.store.getTask(taskId)!;
+  }
+
+  // Records a finished review run's verdict and returns the stage it leads to. reply is null when
+  // the run did not succeed. Only the owner approves: a pass goes back to needs_review.
+  private reviewVerdict(run: Run, reply: string | null, record: (event: AgentEvent) => void): Partial<Pick<Task, "stage">> {
+    const task = this.store.getTask(run.taskId);
+    if (!task) return {};
+    const verdict = reply === null ? undefined : parseReplyBlocks(reply).findLast((b) => b.type === "review");
+    if (!verdict || verdict.type !== "review") {
+      if (reply !== null)
+        record({ kind: "notice", level: "warn", text: "The review ended without a valid review block. The step goes back to you unreviewed." });
+      return this.stagePatch(task.roleId, task.stage, "review_cancel");
+    }
+    this.store.addTaskReview({ taskId: task.id, runId: run.id, reviewer: run.roleId ?? "agent", verdict: verdict.verdict, findings: verdict.findings });
+    const count = `${verdict.findings.length} finding${verdict.findings.length === 1 ? "" : "s"}`;
+    record({ kind: "notice", level: "info", text: `Agent review: ${verdict.verdict === "pass" ? "passed" : "changes requested"} (${count}).` });
+    return this.stagePatch(task.roleId, task.stage, verdict.verdict === "pass" ? "review_pass" : "review_changes");
+  }
+
+  // The project's opt-in automation after a step or a review ends. It never approves: at most it
+  // asks for a review, or continues after a passed one up to the project's step limit.
+  // ended: the work run that finished a step, or the review run that gave a verdict.
+  private automate(taskId: string, ended: Run, record: (event: AgentEvent) => void): void {
+    const task = this.store.getTask(taskId);
+    const project = task ? this.store.getProject(task.projectId) : null;
+    if (!task || !project || task.stage !== "needs_review" || task.status !== "idle") return;
+    try {
+      if (ended.purpose === "review") {
+        const passed = this.store.listTaskReviews(task.id).at(-1);
+        if (passed?.runId !== ended.id || passed.verdict !== "pass") return;
+        if (task.stepState !== "done" || !task.nextStep || task.autoContinues >= project.autoContinueSteps) return;
+        this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
+        record({
+          kind: "notice",
+          level: "info",
+          text: `Continuing automatically (${task.autoContinues + 1} of ${project.autoContinueSteps}): ${task.nextStep}`,
+        });
+        this.send(task.id, `Continue with: ${task.nextStep}`, true);
+      } else if (project.autoReview) {
+        record({ kind: "notice", level: "info", text: "Asking for an agent review automatically (project setting)." });
+        this.startReview(task.id).catch((error: Error) => record({ kind: "notice", level: "warn", text: `Automatic review did not start: ${error.message}` }));
+      }
+    } catch (error) {
+      record({ kind: "notice", level: "warn", text: `Automation stopped: ${(error as Error).message}` });
+    }
+  }
+
+  // A review that ends without a verdict hands the work back to the owner.
+  private reviewCancelled(run: Pick<Run, "purpose" | "taskId">): Partial<Pick<Task, "stage">> {
+    if (run.purpose !== "review") return {};
+    const task = this.store.getTask(run.taskId);
+    return task ? this.stagePatch(task.roleId, task.stage, "review_cancel") : {};
   }
 
   private startNow(task: Task, message: Message, prompt: string, purpose: Run["purpose"] = "work"): Run {
@@ -372,17 +678,18 @@ export class Runner {
       if (!task || !role) {
         const finished = this.store.finishRun(run.id, { status: "stopped", error: "The role of this task was removed before an agent picked it up." });
         if (finished) this.bus.publish({ type: "run_updated", run: finished });
-        if (task) this.publishTask(this.store.updateTask(task.id, { status: "idle" }));
+        if (task) this.publishTask(this.store.updateTask(task.id, { status: "idle", ...this.reviewCancelled(run) }));
         continue;
       }
-      const { effort } = this.choice(task);
+      const { effort } = this.choice(this.actorTask(task, run));
       queued.push({
         runId: run.id,
         projectId: task.projectId,
         roleId: role.id,
         roleName: role.name,
         departmentId: role.departmentId,
-        canEdit: task.canEdit && role.canEdit,
+        // Handoff and review runs only read, so they do not hold the department's writer slot.
+        canEdit: run.purpose === "work" && task.canEdit && role.canEdit,
         priority: task.priority,
         emergency: task.emergency,
         forced: run.forced,
@@ -423,7 +730,7 @@ export class Runner {
 
   // Role context for a run: the preamble (text, and a file for Claude), the stdin preface and the
   // edit rules.
-  private roleContext(task: Task, agentId: string | null, firstTurn: boolean, runId: string, provider: Provider, readOnly = false) {
+  private roleContext(task: Task, agentId: string | null, firstTurn: boolean, runId: string, provider: Provider, readOnly = false, repoPath?: string) {
     const role = task.roleId ? this.store.getRole(task.roleId) : null;
     const project = this.store.getProject(task.projectId);
     if (!role || !project) return null;
@@ -437,7 +744,7 @@ export class Runner {
       file = path.join(this.promptsDir, `${runId}.md`);
       fs.writeFileSync(file, systemText);
     }
-    const docs = listDocs(project.repoPath, departments);
+    const docs = listDocs(repoPath ?? project.repoPath, departments);
     // Provide paths, not document bodies. The agent reads only what the current task needs.
     const contextDocs: { path: string; content: string }[] = [];
     const fromRole = task.createdByRoleId ? (this.store.getRole(task.createdByRoleId)?.name ?? "another role") : null;
@@ -453,28 +760,52 @@ export class Runner {
   }
 
   private launch(runId: string, agentId: string | null): Run {
+    try {
+      return this.launchRun(runId, agentId);
+    } catch (error) {
+      // Setup can fail before a child exists. Retain a retryable run and release its slot.
+      const active = this.active.get(runId);
+      if (active?.child?.pid) killTree(active.child);
+      this.active.delete(runId);
+      const failed = this.store.finishRun(runId, { status: "failed", error: (error as Error).message })!;
+      try {
+        this.publishTask(this.store.updateTask(failed.taskId, { status: "failed", ...this.reviewCancelled(failed) }));
+      } catch {
+        this.publishTask(this.store.setTaskStatus(failed.taskId, "failed"));
+      }
+      this.bus.publish({ type: "run_updated", run: failed });
+      this.tick();
+      return failed;
+    }
+  }
+
+  private launchRun(runId: string, agentId: string | null): Run {
     const queuedRun = this.store.getRun(runId)!;
     const task = this.store.getTask(queuedRun.taskId)!;
     const blocked = this.budgetReason(task);
     if (blocked) {
       const held = this.store.finishRun(runId, { status: "stopped", error: blocked })!;
       this.bus.publish({ type: "run_updated", run: held });
-      this.publishTask(this.store.updateTask(task.id, { status: "idle" }));
+      this.publishTask(this.store.updateTask(task.id, { status: "idle", ...this.reviewCancelled(queuedRun) }));
       return held;
     }
     const project = this.store.getProject(task.projectId);
     if (!project) throw new RunnerError("Project not found.", 404);
 
-    const { provider, model, effort, roleCanEdit } = this.choice(task);
+    const reviewing = queuedRun.purpose === "review";
+    const actor = this.actorTask(task, queuedRun);
+    const { provider, model, effort, roleCanEdit } = this.choice(actor);
     const cli = provider === "codex" ? CODEX_CLI : CLAUDE_CLI;
-    const canEdit = task.canEdit && roleCanEdit && queuedRun.purpose !== "handoff";
-    const role = task.roleId ? this.store.getRole(task.roleId) : null;
+    const canEdit = actor.canEdit && roleCanEdit && queuedRun.purpose === "work";
+    if (canEdit && this.store.getWorkspace(task.id)?.mergeCommit) throw new RunnerError("This task was merged. Create a new task for follow-up work.", 409);
+    const role = actor.roleId ? this.store.getRole(actor.roleId) : null;
     // A session belongs to one provider. After a switch the conversation so far goes into the
     // prompt of a new session instead.
-    const switched = task.sessionStarted && task.sessionProvider !== null && task.sessionProvider !== provider;
-    const resume = task.sessionStarted && task.sessionId !== null && !switched;
+    const movingToWorktree = canEdit && !this.store.getWorkspace(task.id);
+    const switched = actor.sessionStarted && ((actor.sessionProvider !== null && actor.sessionProvider !== provider) || movingToWorktree);
+    const resume = actor.sessionStarted && actor.sessionId !== null && !switched;
     // Claude takes the id we choose; Codex picks one and reports it in its first event.
-    const sessionId = resume ? task.sessionId! : provider === "claude" ? randomUUID() : null;
+    const sessionId = resume ? actor.sessionId! : provider === "claude" ? randomUUID() : null;
 
     const run = this.store.startRun(runId, {
       provider,
@@ -496,13 +827,21 @@ export class Runner {
       estimateUsd: costs?.[effort]?.avgUsd ?? EFFORT_COST_GUESS[effort],
     };
     this.active.set(run.id, active);
-    this.publishTask(this.store.updateTask(task.id, { status: "running", sessionId: sessionId ?? task.sessionId, agentId: agentId ?? task.agentId }));
+    this.publishTask(
+      this.store.updateTask(task.id, {
+        status: "running",
+        // The reviewer's session and agent are its own; the task keeps the author's.
+        ...(reviewing ? {} : { sessionId: sessionId ?? task.sessionId, agentId: agentId ?? task.agentId }),
+        ...(movingToWorktree ? { sessionStarted: false, sessionProvider: null } : {}),
+        ...(queuedRun.purpose === "work" ? this.stagePatch(task.roleId, task.stage, "start") : {}),
+      }),
+    );
     this.bus.publish({ type: "run_updated", run });
 
     const message = this.store.getMessage(run.messageId);
     let prompt = this.store.runPrompt(run.id) ?? message?.text ?? "";
     if (switched) prompt = `${this.conversationSoFar(task.id, run.messageId)}${prompt}`;
-    if (!resume && task.handoff) prompt = `<compact-handoff>\n${task.handoff}\n</compact-handoff>\n\n${prompt}`;
+    if (!resume && actor.handoff) prompt = `<compact-handoff>\n${actor.handoff}\n</compact-handoff>\n\n${prompt}`;
 
     let seq = 0;
     const events: AgentEvent[] = [];
@@ -553,34 +892,68 @@ export class Runner {
       }
     };
 
-    const settle = (exitError: string | null) => {
+    const settle = async (exitError: string | null) => {
       if (settled) return;
       settled = true;
-      this.active.delete(run.id);
       if (promptFile) fs.rmSync(promptFile, { force: true });
       // The app is shutting down and its database is closing: the next start marks this run
       // interrupted, which is what happened.
       if (this.closed) return;
-      const status = active.stopRequested ? "stopped" : result ? (result.isError ? "failed" : "succeeded") : "failed";
-      const error =
+      let checkpointError: string | null = null;
+      if (canEdit) {
+        const saved = await this.workspaces.checkpoint(task.id, active.stopRequested ? "Paused work" : "End of agent run");
+        checkpointError = saved?.error ?? null;
+        if (this.closed) return;
+        if (saved)
+          record({
+            kind: "notice",
+            level: saved.error ? "warn" : "info",
+            text: saved.error ?? `Saved local checkpoint ${saved.checkpointCommit?.slice(0, 8)} on ${saved.branch}.`,
+          });
+      }
+      let status = active.stopRequested
+        ? ("stopped" as const)
+        : checkpointError
+          ? ("failed" as const)
+          : result
+            ? result.isError
+              ? ("failed" as const)
+              : ("succeeded" as const)
+            : ("failed" as const);
+      let error =
         status === "stopped"
           ? (active.checkpointReason ?? "Stopped by you.")
           : status === "failed"
-            ? (result?.isError ? result.text : null) || exitError || stderrTail.trim() || `${cli.name} exited without a result.`
+            ? checkpointError || (result?.isError ? result.text : null) || exitError || stderrTail.trim() || `${cli.name} exited without a result.`
             : null;
       const reply = (result && !result.isError ? result.text : "") || finalText(events);
       if (reply.trim()) this.store.addMessage({ taskId: task.id, role: "assistant", text: reply, runId: run.id });
-      if (status === "succeeded") {
+      // A review's reply is advice about the work, never a handoff of the author's session.
+      if (reviewing) {
+        // Nothing to carry over.
+      } else if (status === "succeeded") {
         const handoff = extractHandoff(reply);
-        this.store.updateTask(task.id, { handoff, handoffRunId: handoff ? run.id : null });
+        // A failed handoff preparation keeps the summary the owner may already have written.
+        if (handoff || run.purpose !== "handoff") this.store.updateTask(task.id, { handoff, handoffRunId: handoff ? run.id : null });
         if (run.purpose === "handoff" && !handoff)
           record({
             kind: "notice",
             level: "warn",
-            text: "No valid handoff was returned. The existing session is unchanged; enter or edit a summary manually.",
+            text: "No valid handoff was returned. The existing session is unchanged. The reply is in the handoff editor under Context & usage; edit it and choose Use compact handoff.",
           });
       } else {
         this.store.updateTask(task.id, { handoffRunId: null });
+      }
+      if (canEdit && !checkpointError) {
+        const published = await this.github.publish(task.id);
+        if (this.closed) return;
+        if (published?.publishError) record({ kind: "notice", level: "warn", text: published.publishError });
+        else if (published?.pullRequestUrl) record({ kind: "notice", level: "info", text: `Saved on GitHub: ${published.pullRequestUrl}` });
+      }
+      this.active.delete(run.id);
+      if (active.stopRequested) {
+        status = "stopped";
+        error = active.checkpointReason ?? "Stopped by you.";
       }
       const finished = this.store.finishRun(run.id, {
         status,
@@ -595,11 +968,15 @@ export class Runner {
       if (status === "succeeded" && run.purpose === "work" && !reviewNoticed && !review)
         record({ kind: "notice", level: "warn", text: "The agent did not return the required model assessment. Settings were not changed." });
       let waiting = false;
-      if (status === "succeeded" && !requestedSwitch && run.purpose !== "handoff" && this.replies && !this.closed) {
+      let step: ReplyOutcome["step"] = null;
+      let plan: ReplyOutcome["plan"] = null;
+      if (status === "succeeded" && !requestedSwitch && run.purpose === "work" && this.replies && !this.closed) {
         try {
           const outcome = this.replies.afterReply(this.store.getTask(task.id) ?? task, run, reply);
           for (const notice of outcome.notices) record({ kind: "notice", ...notice });
           waiting = outcome.waiting;
+          step = outcome.step;
+          plan = outcome.plan;
         } catch (error) {
           record({ kind: "notice", level: "warn", text: `The dashboard could not act on this reply: ${(error as Error).message}` });
         }
@@ -607,18 +984,29 @@ export class Runner {
       if (finished) this.bus.publish({ type: "run_updated", run: finished });
       const checkpoint = this.budgetReason(this.store.getTask(task.id) ?? task);
       if (checkpoint) record({ kind: "notice", level: "warn", text: checkpoint });
-      // A role's task is done once its agent finished without asking anything; a chat waits for
-      // the owner's next message.
-      const hasHandoff = this.store.getTask(task.id)?.handoffRunId === run.id;
-      const next =
-        status === "failed"
-          ? "failed"
-          : waiting
-            ? "waiting"
-            : status === "succeeded" && task.roleId && run.purpose !== "handoff" && !hasHandoff
-              ? "done"
-              : "idle";
-      this.publishTask(this.store.updateTask(task.id, { status: next }));
+      // A role task's step needs review once its agent finished without asking anything; a model
+      // switch or handoff continues the same step. A chat just waits for the owner's next message.
+      const latest = this.store.getTask(task.id);
+      const hasHandoff = latest?.handoffRunId === run.id;
+      const reported = status === "succeeded" && task.roleId && run.purpose === "work" && !requestedSwitch;
+      const finishedStep = reported && !hasHandoff && !waiting && step?.state !== "partial";
+      const next = status === "failed" ? "failed" : waiting ? "waiting" : "idle";
+      // The plan lists what is left including the step this reply finishes, so it goes in first.
+      if (reported && plan) this.store.replanTask(task.id, plan);
+      if (finishedStep) this.store.finishActiveStep(task.id, step?.summary || null, run.id);
+      const verdict = reviewing ? this.reviewVerdict(run, status === "succeeded" ? reply : null, record) : {};
+      this.publishTask(
+        this.store.updateTask(task.id, {
+          status: next,
+          // Without a step block the old summary would describe an earlier turn.
+          ...(reported ? { stepState: step?.state ?? null, stepSummary: step?.summary || null, nextStep: step?.next ?? null } : {}),
+          ...(finishedStep ? this.stagePatch(task.roleId, latest?.stage ?? null, "run_succeeded") : {}),
+          ...verdict,
+        }),
+      );
+      // The finished step or the review's verdict now shows in the owner's inbox.
+      if (finishedStep || reviewing) this.bus.publish({ type: "inbox_changed" });
+      if (finishedStep || reviewing) this.automate(task.id, run, record);
       if (requestedSwitch) {
         const currentTask = this.store.getTask(task.id)!;
         const currentChoice = this.choice(currentTask);
@@ -670,112 +1058,141 @@ export class Runner {
       record({
         kind: "notice",
         level: "info",
-        text: `Switched from ${providerName(task.sessionProvider!)} to ${providerName(provider)}: a new session starts with up to 8,000 characters of recent conversation.`,
+        text: movingToWorktree
+          ? "Starting a fresh session in an isolated task worktree with recent conversation context."
+          : `Switched from ${providerName(task.sessionProvider!)} to ${providerName(provider)}: a new session starts with up to 8,000 characters of recent conversation.`,
       });
 
-    let launcher: Launcher;
-    let args: string[];
-    let input = prompt;
-    let cwd = project.repoPath;
-    try {
-      const settings = this.store.getSettings();
-      launcher =
-        this.launcherOverride[provider] ??
-        (provider === "codex" ? resolveLauncher(settings.codexPath, process.env, CODEX_CLI) : resolveLauncher(settings.claudePath));
-      if (!fs.existsSync(project.repoPath)) throw new Error(`The project folder does not exist: ${project.repoPath}`);
-      const ctx = role ? this.roleContext(task, agentId, !resume, run.id, provider, run.purpose === "handoff") : null;
-      if (ctx) {
-        promptFile = ctx.file;
-        input = `${ctx.preface}\n${prompt}`;
-      }
-      if (provider === "claude") {
-        args = buildArgs({
-          model: model!,
-          effort,
-          sessionId: sessionId!,
-          resume,
-          canEdit,
-          allowedTools: ctx?.allowedTools ?? project.allowedTools,
-          systemPrompt: systemPrompt(project.name, canEdit),
-          systemPromptFile: ctx?.file ?? undefined,
-          editRules: ctx?.rules ?? null,
-        });
-      } else {
-        // Codex has no system prompt option that takes a file, so its instructions open the first
-        // message. Its sandbox makes the working directory writable, so a department confined to
-        // folders works from its first folder, with the others as extra writable roots.
-        const confined = canEdit && ctx && !ctx.department.folders.includes(".");
-        let where = "";
-        let roots: string[] = [];
-        if (confined) {
-          const [first, ...rest] = ctx.department.folders;
-          cwd = path.join(project.repoPath, ...first!.split("/"));
-          fs.mkdirSync(cwd, { recursive: true });
-          roots = rest.map((f) => path.join(project.repoPath, ...f.split("/")));
-          const up = first!
-            .split("/")
-            .map(() => "..")
-            .join("/");
-          where = `\n\nYour working directory is \`${first}/\` inside the repository; the repository root is \`${up}\`. Only your department's folders are writable.`;
-        }
-        if (!resume) input = `<instructions>\n${ctx ? ctx.systemText : systemPrompt(project.name, canEdit)}${where}\n</instructions>\n\n${input}`;
-        args = buildCodexArgs({ model, effort, resumeId: resume ? sessionId : null, sandbox: canEdit ? "workspace-write" : "read-only", writableRoots: roots });
-      }
-      const allowance = this.remainingAllowance(task);
-      input += `\n\n${efficiencyInstructions(allowance.tokens, allowance.tools)}`;
-      if (run.purpose === "work") input += `\n\n${modelRoutingInstructions({ provider, model, effort }, [...this.modelOptions[provider]], switchCount)}`;
-    } catch (error) {
-      record({ kind: "error", message: (error as Error).message });
-      settle((error as Error).message);
-      return this.store.getRun(run.id)!;
-    }
-
-    const child = spawn(launcher.command, [...launcher.prefix, ...args], {
-      cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      // Own process group on POSIX so Stop can end the agent's children too.
-      detached: process.platform !== "win32",
-    });
-    active.child = child;
-
-    child.on("error", (error) => {
-      record({ kind: "error", message: `Could not start ${cli.name} (${launcher.display}): ${error.message}` });
-      settle(error.message);
-    });
-
-    child.stdin?.on("error", () => {
-      // The process exited before reading its prompt; the exit handler reports why.
-    });
-    child.stdin?.end(input);
-
-    const parse = provider === "codex" ? createCodexParser() : parseClaudeLine;
-    readline.createInterface({ input: child.stdout! }).on("line", (line) => {
-      // Output still draining after shutdown has no database to go to.
+    const startAgent = async () => {
+      let workspace = this.store.getWorkspace(task.id);
+      if (canEdit) workspace = await this.workspaces.ensure(task.id, project.repoPath, (text) => record({ kind: "notice", level: "warn", text }));
+      else if (workspace) await this.workspaces.verify(workspace);
       if (this.closed) return;
-      for (const event of parse(line)) {
-        // The session now exists: later messages resume it, with this provider.
-        if (event.kind === "init") {
-          const id = event.sessionId || sessionId;
-          if (!task.sessionStarted || task.sessionId !== id || task.sessionProvider !== provider) {
-            this.publishTask(this.store.updateTask(task.id, { sessionStarted: true, sessionId: id, sessionProvider: provider }));
-            Object.assign(task, { sessionStarted: true, sessionId: id, sessionProvider: provider });
+      if (active.stopRequested) {
+        await settle(null);
+        return;
+      }
+      const repoPath = workspace?.path ?? project.repoPath;
+      if (workspace) {
+        record({ kind: "notice", level: "info", text: `Isolated worktree: ${workspace.path} (${workspace.branch}). The project checkout is unchanged.` });
+        prompt +=
+          "\n\nWork only in this task's isolated worktree. Keep its assigned branch. The dashboard saves local WIP commits after runs; do not switch branches, merge into the live checkout, or remove the worktree. Dependencies may need installing in this separate folder.";
+      }
+      let launcher: Launcher;
+      let args: string[];
+      let input = prompt;
+      let cwd = repoPath;
+      try {
+        const settings = this.store.getSettings();
+        launcher =
+          this.launcherOverride[provider] ??
+          (provider === "codex" ? resolveLauncher(settings.codexPath, process.env, CODEX_CLI) : resolveLauncher(settings.claudePath));
+        if (!fs.existsSync(repoPath)) throw new Error(`The project folder does not exist: ${repoPath}`);
+        const ctx = role ? this.roleContext(actor, agentId, !resume, run.id, provider, run.purpose !== "work", repoPath) : null;
+        if (ctx) {
+          promptFile = ctx.file;
+          input = `${ctx.preface}\n${prompt}`;
+        }
+        if (provider === "claude") {
+          args = buildArgs({
+            model: model!,
+            effort,
+            sessionId: sessionId!,
+            resume,
+            canEdit,
+            allowedTools: ctx?.allowedTools ?? project.allowedTools,
+            systemPrompt: systemPrompt(project.name, canEdit),
+            systemPromptFile: ctx?.file ?? undefined,
+            editRules: ctx?.rules ?? null,
+          });
+        } else {
+          // Codex has no system prompt option that takes a file, so its instructions open the first
+          // message. Its sandbox makes the working directory writable, so a department confined to
+          // folders works from its first folder, with the others as extra writable roots.
+          const confined = canEdit && ctx && !ctx.department.folders.includes(".");
+          let where = "";
+          let roots: string[] = [];
+          if (confined) {
+            const [first, ...rest] = ctx.department.folders;
+            cwd = path.join(repoPath, ...first!.split("/"));
+            fs.mkdirSync(cwd, { recursive: true });
+            roots = rest.map((f) => path.join(repoPath, ...f.split("/")));
+            const up = first!
+              .split("/")
+              .map(() => "..")
+              .join("/");
+            where = `\n\nYour working directory is \`${first}/\` inside the repository; the repository root is \`${up}\`. Only your department's folders are writable.`;
           }
+          if (!resume) input = `<instructions>\n${ctx ? ctx.systemText : systemPrompt(project.name, canEdit)}${where}\n</instructions>\n\n${input}`;
+          args = buildCodexArgs({
+            model,
+            effort,
+            resumeId: resume ? sessionId : null,
+            sandbox: canEdit ? "workspace-write" : "read-only",
+            writableRoots: roots,
+          });
         }
-        if (event.kind === "result") result = event;
-        record(event);
+        const allowance = this.remainingAllowance(task);
+        input += `\n\n${efficiencyInstructions(allowance.tokens, allowance.tools)}`;
+        if (run.purpose === "work") input += `\n\n${modelRoutingInstructions({ provider, model, effort }, [...this.modelOptions[provider]], switchCount)}`;
+      } catch (error) {
+        record({ kind: "error", message: (error as Error).message });
+        settle((error as Error).message);
+        return this.store.getRun(run.id)!;
       }
-    });
 
-    readline.createInterface({ input: child.stderr! }).on("line", (line) => {
+      const child = spawn(launcher.command, [...launcher.prefix, ...args], {
+        cwd,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        // Own process group on POSIX so Stop can end the agent's children too.
+        detached: process.platform !== "win32",
+      });
+      active.child = child;
+
+      child.on("error", (error) => {
+        record({ kind: "error", message: `Could not start ${cli.name} (${launcher.display}): ${error.message}` });
+        settle(error.message);
+      });
+
+      child.stdin?.on("error", () => {
+        // The process exited before reading its prompt; the exit handler reports why.
+      });
+      child.stdin?.end(input);
+
+      const parse = provider === "codex" ? createCodexParser() : parseClaudeLine;
+      readline.createInterface({ input: child.stdout! }).on("line", (line) => {
+        // Output still draining after shutdown has no database to go to.
+        if (this.closed) return;
+        for (const event of parse(line)) {
+          // The session now exists: later messages resume it, with this provider.
+          if (event.kind === "init" && !reviewing) {
+            const id = event.sessionId || sessionId;
+            if (!task.sessionStarted || task.sessionId !== id || task.sessionProvider !== provider) {
+              this.publishTask(this.store.updateTask(task.id, { sessionStarted: true, sessionId: id, sessionProvider: provider }));
+              Object.assign(task, { sessionStarted: true, sessionId: id, sessionProvider: provider });
+            }
+          }
+          if (event.kind === "result") result = event;
+          record(event);
+        }
+      });
+
+      readline.createInterface({ input: child.stderr! }).on("line", (line) => {
+        if (this.closed) return;
+        stderrTail = (stderrTail + line + "\n").slice(-STDERR_TAIL_CHARS);
+        if (line.trim()) record({ kind: "stderr", text: line });
+      });
+
+      child.on("close", (code, signal) => {
+        settle(code === 0 ? null : `${cli.name} exited with ${signal ? `signal ${signal}` : `code ${code}`}.`);
+      });
+    };
+    void startAgent().catch((error: Error) => {
       if (this.closed) return;
-      stderrTail = (stderrTail + line + "\n").slice(-STDERR_TAIL_CHARS);
-      if (line.trim()) record({ kind: "stderr", text: line });
-    });
-
-    child.on("close", (code, signal) => {
-      settle(code === 0 ? null : `${cli.name} exited with ${signal ? `signal ${signal}` : `code ${code}`}.`);
+      record({ kind: "error", message: error.message });
+      void settle(error.message);
     });
 
     return this.store.getRun(run.id)!;

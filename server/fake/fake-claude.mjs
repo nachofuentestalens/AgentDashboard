@@ -4,7 +4,8 @@
 // Keywords in the prompt pick a scenario: [tool] runs a fake tool call, [fail] ends with an error
 // result, [crash] exits without a result, [slow] keeps streaming for a long time (to test Stop).
 // Studio scenarios end the reply with blocks: [proposal:design/x.md], [task:Role Name:7],
-// [emergency:Role Name], [question], [badblock]. [cost:1.5] reports that cost; [args] and
+// [emergency:Role Name], [question], [badblock], [plan], [step-done|complete|partial], and in review runs
+// [review-pass|changes]. [cost:1.5] reports that cost; [args] and
 // [sysprompt] echo the arguments and the role's system prompt file.
 
 import fs from "node:fs";
@@ -40,6 +41,7 @@ const context = prompt.match(/^<studio-context>[\s\S]*?<\/studio-context>\s*/);
 if (context) prompt = prompt.slice(context[0].length).trim();
 const history = prompt.match(/^<conversation-so-far>[\s\S]*?<\/conversation-so-far>\s*/);
 if (history) prompt = prompt.slice(history[0].length).trim();
+prompt = prompt.replace(/\n\nWork only in this task's isolated worktree\.[\s\S]*$/, "");
 const systemFile = flag("--append-system-prompt-file");
 const systemText = systemFile ? fs.readFileSync(systemFile, "utf8") : "";
 const who = systemText.match(/^You are (.+?), the (.+?) in the (.+?) department/);
@@ -47,10 +49,11 @@ const who = systemText.match(/^You are (.+?), the (.+?) in the (.+?) department/
 emit({ type: "system", subtype: "init", session_id: sessionId, model, cwd: process.cwd(), tools: [] });
 
 let lastText = "";
-async function say(text) {
+// Long echoes go out as one delta: word by word they take seconds and slow the tests down.
+async function say(text, byWord = true) {
   lastText = text;
   emit({ type: "stream_event", event: { type: "message_start" }, session_id: sessionId, parent_tool_use_id: null });
-  for (const word of text.split(/(?<= )/)) {
+  for (const word of byWord ? text.split(/(?<= )/) : [text]) {
     emit({
       type: "stream_event",
       event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: word } },
@@ -74,7 +77,11 @@ const review = routingCurrent
   : null;
 if (review) await say("```model-review\n" + JSON.stringify(review) + "\n```");
 
-if (prompt.includes("[input]")) await say(`Input: ${rawPrompt}`);
+if (prompt.includes("[input]")) await say(`Input: ${rawPrompt}`, false);
+if (prompt.includes("[write-workspace]")) {
+  fs.writeFileSync("agent-work.txt", "Unfinished agent work\n");
+  await say(`Workspace write: ${process.cwd()}`);
+}
 
 if (prompt.includes("[crash]")) {
   process.stderr.write("fake-claude: simulated crash\n");
@@ -98,9 +105,9 @@ await say(
   `${resumed ? "Continuing session" : "Starting session"} ${sessionId.slice(0, 8)} on ${model} (${mode})${persona}${context ? " with studio context" : ""}. You said: "${prompt.slice(0, 200)}"`,
 );
 if (prompt.includes("[args]")) await say(`Arguments: ${JSON.stringify(args)}`);
-if (prompt.includes("[sysprompt]")) await say(`System prompt: ${systemText.slice(0, 4000)}`);
-if (prompt.includes("[context]") && context) await say(`Context: ${context[0].slice(0, 4000)}`);
-if (prompt.includes("[history]")) await say(`History: ${(history?.[0] ?? "none").slice(0, 4000)}`);
+if (prompt.includes("[sysprompt]")) await say(`System prompt: ${systemText.slice(0, 4000)}`, false);
+if (prompt.includes("[context]") && context) await say(`Context: ${context[0].slice(0, 4000)}`, false);
+if (prompt.includes("[history]")) await say(`History: ${(history?.[0] ?? "none").slice(0, 4000)}`, false);
 
 if (prompt.includes("[tool]")) {
   const id = "toolu_fake_1";
@@ -143,6 +150,16 @@ for (const m of prompt.matchAll(/\[emergency:([^\]]+)\]/g)) {
 }
 if (prompt.includes("[question]")) blocks.push(fence("question", "Should the warrior use a shield?"));
 if (prompt.includes("[badblock]")) blocks.push(fence("task", "{ not json"));
+// Only a review prompt gets a verdict, so the same keyword in the task's request leaves work runs alone.
+const reviewing = prompt.includes("exactly one review block");
+if (reviewing && prompt.includes("[review-pass]")) blocks.push(fence("review", JSON.stringify({ verdict: "pass", findings: ["qa/plan.md:3 minor wording"] })));
+if (reviewing && prompt.includes("[review-changes]"))
+  blocks.push(fence("review", JSON.stringify({ verdict: "changes", findings: ["src/dash.ts:42 cooldown never resets after death"] })));
+if (prompt.includes("[plan]")) blocks.push(fence("plan", JSON.stringify({ steps: ["Add the dash ability", "Tune the dash cooldown", "Write the tests"] })));
+for (const state of ["done", "complete", "partial"]) {
+  if (prompt.includes(`[step-${state}]`))
+    blocks.push(fence("step", JSON.stringify({ state, summary: `Fake step ${state}.`, next: state === "complete" ? null : "Tune the dash cooldown." })));
+}
 if (blocks.length) await say(`Here is what I need.\n\n${blocks.join("\n\n")}`);
 
 if (preparingHandoff || prompt.includes("[handoff]"))

@@ -8,7 +8,8 @@ import { EfficiencyPanel } from "../components/EfficiencyPanel.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { RunView } from "../components/RunView.tsx";
-import { Button, ErrorNote, PriorityBadge, PrioritySelect, StatusBadge, Toggle } from "../components/ui.tsx";
+import { StageActions } from "../components/StageActions.tsx";
+import { Button, ErrorNote, PriorityBadge, PrioritySelect, selectClass, StageBadge, StatusBadge, Toggle } from "../components/ui.tsx";
 import { cost } from "../format.ts";
 import { useRoles } from "./ProjectPage.tsx";
 
@@ -45,6 +46,18 @@ export function TaskPage() {
     onSuccess: () => void navigate(detail.data ? `/projects/${detail.data.task.projectId}` : "/"),
   });
   const roles = useRoles(detail.data?.task.projectId ?? "");
+  const checkpoint = useMutation({
+    mutationFn: async () => {
+      const active = detail.data?.runs.findLast((r) => r.status === "running" || r.status === "queued");
+      if (active) await api.stopRun(active.id);
+      else await api.checkpointTask(taskId);
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.task(taskId) }),
+  });
+  const github = useMutation({
+    mutationFn: (action: "publish" | "merge") => (action === "publish" ? api.publishTask(taskId) : api.mergeTask(taskId)),
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.task(taskId) }),
+  });
 
   // Follow the stream while the reader is at the bottom; leave them alone if they scrolled up.
   const scroller = useRef<HTMLDivElement>(null);
@@ -78,6 +91,9 @@ export function TaskPage() {
   const totalCost = detail.data.runs.reduce((sum, r) => sum + r.costUsd, 0);
   const role = roles.find((r) => r.role.id === task.roleId);
   const agentName = role?.role.agents.find((a) => a.id === task.agentId)?.name;
+  const latestReview = detail.data.reviews?.at(-1);
+  const steps = detail.data.steps ?? [];
+  const roleName = (id: string) => roles.find((r) => r.role.id === id)?.role.name ?? "removed role";
 
   return (
     <div className="flex h-full flex-col">
@@ -108,20 +124,33 @@ export function TaskPage() {
             <PriorityBadge priority={task.priority} emergency={task.emergency} />
             <PrioritySelect value={task.priority} onChange={(priority) => update.mutate({ priority })} />
             <Toggle checked={task.emergency} onChange={(emergency) => update.mutate({ emergency })} label="Emergency" />
+            <select
+              aria-label="Reviewer"
+              className={selectClass}
+              value={task.reviewerRoleId ?? ""}
+              onChange={(e) => update.mutate({ reviewerRoleId: e.target.value || null })}
+              title="Who reviews this task's steps when you ask for a review"
+            >
+              <option value="">Reviewer: role default</option>
+              {roles.map(({ role: r }) => (
+                <option key={r.id} value={r.id}>
+                  Reviewer: {r.name}
+                </option>
+              ))}
+            </select>
           </>
         )}
         <StatusBadge status={task.status} />
         <span className="text-xs text-ink-400" title="Total cost of this task">
           {cost(totalCost)}
         </span>
-        {task.status === "done" ? (
-          <Button variant="ghost" className="text-xs" onClick={() => update.mutate({ done: false })}>
-            Reopen
-          </Button>
+        <StageBadge stage={task.stage} />
+        {task.stage ? (
+          <StageActions task={task} />
         ) : (
-          task.roleId && (
-            <Button variant="ghost" className="text-xs" disabled={busy} onClick={() => update.mutate({ done: true })} title="Nothing more to do here">
-              Mark done
+          task.status === "done" && (
+            <Button variant="ghost" className="text-xs" onClick={() => update.mutate({ done: false })}>
+              Reopen
             </Button>
           )
         )}
@@ -137,6 +166,99 @@ export function TaskPage() {
           Delete
         </Button>
       </header>
+      {(task.canEdit || detail.data.workspace) && (
+        <div className="border-b border-ink-800 px-6 py-2 text-xs text-ink-300" aria-label="Task workspace">
+          <div className="flex flex-wrap items-center gap-3">
+            <span>{detail.data.workspace ? `Isolated branch: ${detail.data.workspace.branch}` : "Writing runs use a separate task worktree."}</span>
+            <Button variant="ghost" disabled={checkpoint.isPending || (!busy && !detail.data.workspace)} onClick={() => checkpoint.mutate()}>
+              {busy ? "Pause & checkpoint" : "Save checkpoint"}
+            </Button>
+          </div>
+          {detail.data.workspace && (
+            <>
+              <p className="break-all text-ink-400">{detail.data.workspace.path}</p>
+              <p>
+                {detail.data.workspace.checkpointCommit
+                  ? `Local checkpoint: ${detail.data.workspace.checkpointCommit.slice(0, 8)} · ${detail.data.workspace.checkpointAt}`
+                  : "No checkpoint saved yet."}{" "}
+                {detail.data.workspace.publishedCommit === detail.data.workspace.checkpointCommit && detail.data.workspace.publishedCommit
+                  ? "Checkpoint backed up on GitHub."
+                  : "Not published to GitHub."}
+              </p>
+              {!detail.data.workspace.mergeCommit && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button variant="ghost" disabled={busy || checkpoint.isPending || github.isPending} onClick={() => github.mutate("publish")}>
+                    Publish / retry GitHub
+                  </Button>
+                  {detail.data.workspace.pullRequestUrl && (
+                    <>
+                      <a className="text-sky-300 underline" href={detail.data.workspace.pullRequestUrl} target="_blank" rel="noreferrer">
+                        Open pull request
+                      </a>
+                      <Button
+                        variant="ghost"
+                        disabled={busy || checkpoint.isPending || github.isPending || (!!task.roleId && task.stage !== "approved")}
+                        onClick={() => github.mutate("merge")}
+                      >
+                        Merge on GitHub
+                      </Button>
+                    </>
+                  )}
+                </div>
+              )}
+              {detail.data.workspace.mergeCommit && (
+                <p>Merged as {detail.data.workspace.mergeCommit.slice(0, 8)}. The running checkout is unchanged; update it when ready to restart.</p>
+              )}
+              {detail.data.workspace.error && <p className="text-amber-300">{detail.data.workspace.error}</p>}
+              {detail.data.workspace.publishError && <p className="text-amber-300">{detail.data.workspace.publishError}</p>}
+            </>
+          )}
+          <ErrorNote error={checkpoint.error} />
+          <ErrorNote error={github.error} />
+        </div>
+      )}
+      {task.stage && (task.stepSummary || task.nextStep || task.stepState === "complete") && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-ink-800 px-6 py-2 text-xs text-ink-300" aria-label="Step report">
+          {task.stepState === "complete" && <span className="font-semibold text-emerald-300">Agent: complete</span>}
+          {task.stepSummary && <span>{task.stepSummary}</span>}
+          {task.nextStep && <span className="text-ink-400">Next: {task.nextStep}</span>}
+        </div>
+      )}
+      {steps.length > 0 && (
+        <details className="border-b border-ink-800 px-6 py-2 text-xs" aria-label="Plan">
+          <summary className="cursor-pointer text-ink-300">
+            Plan: step {Math.min(steps.filter((s) => s.state === "done").length + 1, steps.length)} of {steps.length}
+            {steps.find((s) => s.state === "active") && <span className="text-ink-400"> · {steps.find((s) => s.state === "active")!.title}</span>}
+          </summary>
+          <ol className="mt-1 space-y-0.5 pl-1">
+            {steps.map((s) => (
+              <li key={s.id} className={s.state === "done" ? "text-ink-400" : s.state === "active" ? "text-ink-100" : "text-ink-300"}>
+                {s.state === "done" ? "✓" : s.state === "active" ? "▸" : "·"} {s.title}
+                {s.summary && <span className="text-ink-400"> · {s.summary}</span>}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+      {latestReview && (
+        <details className="border-b border-ink-800 px-6 py-2 text-xs" aria-label="Latest review">
+          <summary className="cursor-pointer text-ink-300">
+            <span className={latestReview.verdict === "changes" ? "font-semibold text-amber-300" : "font-semibold text-emerald-300"}>
+              {latestReview.reviewer === "owner" ? "Your review" : `Agent review (${roleName(latestReview.reviewer)})`}:{" "}
+              {{ pass: "passed", changes: "changes requested", approved: "approved" }[latestReview.verdict]}
+            </span>
+            {latestReview.findings.length > 0 && ` · ${latestReview.findings.length} finding${latestReview.findings.length === 1 ? "" : "s"}`}
+            {(detail.data.reviews?.length ?? 0) > 1 && ` · ${detail.data.reviews!.length} reviews in all`}
+          </summary>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink-200">
+            {latestReview.findings.map((f, i) => (
+              <li key={i} className="font-mono">
+                {f}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <EfficiencyPanel key={task.id} detail={detail.data} />
 
       <div
@@ -186,7 +308,13 @@ export function TaskPage() {
               ? "The agent is working. You can type your next message meanwhile."
               : task.status === "queued"
                 ? "Queued for an agent. You can type your next message meanwhile."
-                : "Reply to the agent…"
+                : task.stage === "needs_review"
+                  ? task.nextStep
+                    ? `Continue with: ${task.nextStep}`
+                    : "Ask for changes, or say what to do next…"
+                  : task.stage === "changes_requested"
+                    ? "Describe the fix, or use Fix to send the review findings…"
+                    : "Reply to the agent…"
           }
           disabled={busy}
           busy={send.isPending || update.isPending}

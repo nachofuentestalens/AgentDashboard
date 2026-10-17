@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { DEFAULT_ALLOWED_TOOLS, PROVIDERS, PROVIDER_EFFORTS, effortFor, type Provider, type Effort, type Project } from "@ad/shared";
 import { api, keys } from "../api.ts";
-import { Button, ErrorNote, Field, inputClass } from "../components/ui.tsx";
+import { Button, ErrorNote, Field, inputClass, Toggle } from "../components/ui.tsx";
 
 export function ProjectSettings({ project }: { project: Project }) {
   const catalog = useModelCatalog();
@@ -16,6 +16,9 @@ export function ProjectSettings({ project }: { project: Project }) {
   const [model, setModel] = useState(project.defaultModel);
   const [effort, setEffort] = useState<Effort>(project.defaultEffort);
   const [tools, setTools] = useState(project.allowedTools.join("\n"));
+  const [autoReview, setAutoReview] = useState(project.autoReview);
+  const [autoContinue, setAutoContinue] = useState(project.autoContinueSteps);
+  const [startNext, setStartNext] = useState(project.startNextWhenIdle);
 
   const save = useMutation({
     mutationFn: () =>
@@ -29,6 +32,9 @@ export function ProjectSettings({ project }: { project: Project }) {
           .split(/\r?\n/)
           .map((t) => t.trim())
           .filter(Boolean),
+        autoReview,
+        autoContinueSteps: autoContinue,
+        startNextWhenIdle: startNext,
       }),
     onSuccess: (p) => qc.setQueryData(keys.project(p.id), p),
   });
@@ -102,6 +108,23 @@ export function ProjectSettings({ project }: { project: Project }) {
       >
         <textarea className={`${inputClass} min-h-36 font-mono`} value={tools} onChange={(e) => setTools(e.target.value)} />
       </Field>
+      <fieldset className="space-y-3 rounded-xl border border-ink-800 p-4">
+        <legend className="px-1 text-sm font-semibold text-ink-200">Task automation</legend>
+        <p className="text-xs text-ink-400">For role tasks. You still approve and close every task yourself.</p>
+        <Toggle checked={autoReview} onChange={setAutoReview} label="Ask for an agent review when a step finishes" />
+        <Field label="Continue after a passed review" hint="How many steps in a row an agent may continue on its own before you step in. 0 turns it off.">
+          <input
+            type="number"
+            min={0}
+            max={20}
+            aria-label="Steps to continue automatically"
+            className={`${inputClass} !w-24`}
+            value={autoContinue}
+            onChange={(e) => setAutoContinue(Math.max(0, Math.min(20, Math.round(Number(e.target.value) || 0))))}
+          />
+        </Field>
+        <Toggle checked={startNext} onChange={setStartNext} label="Start a role's next backlog task when it has nothing to do" />
+      </fieldset>
       <ErrorNote error={save.error} />
       <div className="flex items-center gap-3">
         <Button type="submit" variant="primary" disabled={save.isPending}>

@@ -10,9 +10,11 @@ import {
   updateProjectBody,
   updateSettingsBody,
   updateTaskBody,
+  taskActionBody,
   type Provider,
   type ServerPush,
   type TaskDetail,
+  type TaskStage,
 } from "@ad/shared";
 import { Bus } from "./bus.ts";
 import { checkCli, type Launcher } from "./claude.ts";
@@ -140,6 +142,8 @@ export async function buildApp(options: AppOptions): Promise<App> {
     }
     const project = store.updateProject(request.params.id, body);
     projectsChanged();
+    // Turning on "start next when idle" may start backlog work right away.
+    if (body.startNextWhenIdle) runner.tick();
     return project;
   });
 
@@ -175,13 +179,24 @@ export async function buildApp(options: AppOptions): Promise<App> {
       priority: body.priority,
       emergency: body.emergency,
     });
+    // A new backlog task may start at once in a project that starts work when a role is idle.
+    runner.tick();
     return reply.code(201).send(task);
   });
 
   app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
     const task = store.getTask(request.params.id);
     if (!task) return notFound(reply, "Task");
-    const detail: TaskDetail = { task, messages: store.listMessages(task.id), runs: store.listRuns(task.id), usageSummary: runner.usageSummary(task.id) };
+    const detail: TaskDetail = {
+      task,
+      messages: store.listMessages(task.id),
+      runs: store.listRuns(task.id),
+      usageSummary: runner.usageSummary(task.id),
+      checkpoint: runner.budgetReason(task),
+      reviews: store.listTaskReviews(task.id),
+      steps: store.listTaskSteps(task.id),
+      workspace: store.getWorkspace(task.id),
+    };
     return detail;
   });
 
@@ -196,11 +211,22 @@ export async function buildApp(options: AppOptions): Promise<App> {
     )
       return reply.code(409).send({ error: "Wait for the agent or stop it before changing usage controls." });
     const { done, ...patch } = body;
+    if (patch.reviewerRoleId !== undefined) {
+      if (!current.roleId) return reply.code(400).send({ error: "Only a role's task has a reviewer." });
+      if (patch.reviewerRoleId && store.getRole(patch.reviewerRoleId)?.projectId !== current.projectId)
+        return reply.code(400).send({ error: "The reviewer must be a role in this project." });
+    }
     let status = current.status;
     if (done !== undefined) {
       if (current.status === "running" || current.status === "queued")
         return reply.code(409).send({ error: "Stop the agent before closing or reopening this task." });
-      status = done ? "done" : "idle";
+      if (current.stage) {
+        // Kept for older clients: a role task's done flag maps to the stage actions.
+        // Marking finished work done also records the approval; other stages are dropped.
+        const closeMoves: Partial<Record<TaskStage, ("approve" | "close")[]>> = { needs_review: ["approve", "close"], closed: [] };
+        const moves = done ? (closeMoves[current.stage] ?? ["close"]) : current.stage === "closed" ? ["reopen" as const] : [];
+        for (const action of moves) runner.stageAction(current.id, { action });
+      } else status = done ? "done" : "idle";
     }
     const task = store.updateTask(current.id, {
       ...patch,
@@ -230,6 +256,12 @@ export async function buildApp(options: AppOptions): Promise<App> {
     return reply.code(204).send();
   });
 
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/actions", async (request, reply) => {
+    const body = parse(taskActionBody, request.body, reply);
+    if (!body) return;
+    return body.action === "review" ? runner.startReview(request.params.id, body.roleId) : runner.stageAction(request.params.id, body);
+  });
+
   app.post<{ Params: { id: string } }>("/api/tasks/:id/messages", async (request, reply) => {
     const body = parse(sendMessageBody, request.body, reply);
     if (!body) return;
@@ -237,6 +269,10 @@ export async function buildApp(options: AppOptions): Promise<App> {
   });
 
   // ---- runs
+
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/checkpoint", async (request) => runner.checkpointTask(request.params.id));
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/publish", async (request) => runner.publishWorkspace(request.params.id));
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/merge", async (request) => runner.mergeWorkspace(request.params.id));
 
   app.post<{ Params: { id: string } }>("/api/tasks/:id/prepare-handoff", async (request, reply) =>
     reply.code(201).send(runner.prepareHandoff(request.params.id)),
@@ -258,7 +294,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
     return reply.code(202).send({ ok: true });
   });
 
-  app.post<{ Params: { id: string } }>("/api/runs/:id/retry", async (request, reply) => reply.code(201).send(runner.retry(request.params.id)));
+  app.post<{ Params: { id: string } }>("/api/runs/:id/retry", async (request, reply) => reply.code(201).send(await runner.retry(request.params.id)));
 
   app.post<{ Params: { id: string } }>("/api/runs/:id/force", async (request) => {
     const run = runner.force(request.params.id);

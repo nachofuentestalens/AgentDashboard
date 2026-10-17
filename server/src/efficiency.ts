@@ -3,16 +3,24 @@ import type { Usage } from "@ad/shared";
 
 export const totalTokens = (u: Usage) => u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens + u.outputTokens;
 
-const field = z.string().trim().min(1).max(2000);
+// Agents often list files or steps as arrays; accept those as lines instead of failing the handoff.
+const field = z.preprocess(
+  (v) => (Array.isArray(v) && v.every((x) => typeof x === "string" || typeof x === "number") ? v.map((x) => `- ${x}`).join("\n") : v),
+  z.string().trim().min(1),
+);
 const handoff = z.object({ goal: field, constraints: field, files: field, completed: field, verification: field, remaining: field }).strict();
 
 export const HANDOFF_REQUEST = `Prepare a compact context handoff using only the conversation you already have. Do not call tools, edit files, delegate, or continue implementation. Preserve user requirements and corrections. Distinguish verified facts from assumptions and list unfinished work. Return one fenced context-handoff JSON block with six string fields: goal, constraints, files, completed, verification, remaining. Use at most 6,000 characters in the block. This summary will be reviewed before a fresh session starts.`;
 
 export function extractHandoff(text: string): string | null {
-  const blocks = [...text.matchAll(/```context-handoff\s*\n([\s\S]*?)\n```/g)];
-  if (blocks.length !== 1 || blocks[0]![1]!.length > 6000) return null;
+  const normalized = text.replace(/\r\n/g, "\n");
+  const blocks = [...normalized.matchAll(/```[ \t]*context-handoff[^\n]*\n([\s\S]*?)\n[ \t]*```/g)].map((m) => m[1]!);
+  // Some agents (Codex in particular) answer with the bare JSON object and no fence.
+  if (blocks.length === 0 && /^\{[\s\S]*\}$/.test(normalized.trim())) blocks.push(normalized.trim());
+  // Only the rendered summary is capped: indentation in the JSON should not reject a handoff.
+  if (blocks.length !== 1) return null;
   try {
-    const parsed = handoff.parse(JSON.parse(blocks[0]![1]!));
+    const parsed = handoff.parse(JSON.parse(blocks[0]!));
     const summary = Object.entries(parsed)
       .map(([key, value]) => `${key.toUpperCase()}\n${value}`)
       .join("\n\n");

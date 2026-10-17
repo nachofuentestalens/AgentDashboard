@@ -6,3 +6,4 @@ export * from "./codex-parser.ts";
 export * from "./transcript.ts";
 export * from "./blocks.ts";
 export * from "./diff.ts";
+export * from "./attention.ts";

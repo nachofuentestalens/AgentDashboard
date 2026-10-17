@@ -21,12 +21,25 @@ export function EfficiencyPanel({ detail }: { detail: TaskDetail }) {
     detail.usageSummary?.toolCalls ?? 0,
   );
   const near = (task.tokenBudget !== null && usedTokens >= task.tokenBudget * 0.8) || (task.toolBudget !== null && usedTools >= task.toolBudget * 0.8);
-  const blocked = (task.tokenBudget !== null && usedTokens >= task.tokenBudget) || (task.toolBudget !== null && usedTools >= task.toolBudget);
+  const tokensHit = task.tokenBudget !== null && usedTokens >= task.tokenBudget;
+  const toolsHit = task.toolBudget !== null && usedTools >= task.toolBudget;
+  // The server also checks parent tasks' allowances, which this panel cannot see on its own.
+  const blocked = Boolean(detail.checkpoint) || tokensHit || toolsHit;
+  const hitClass = "ring-2 ring-amber-400";
   const sessionStart = task.sessionId ? runs.find((r) => r.sessionId === task.sessionId)?.startedAt : null;
+  // When the latest handoff run returned no valid block, offer its reply as a draft instead of an empty editor.
+  const lastRun = runs.at(-1);
+  const draft =
+    task.handoff ?? (lastRun?.purpose === "handoff" ? (detail.messages.findLast((m) => m.role === "assistant" && m.runId === lastRun.id)?.text ?? "") : "");
   return (
-    <details className="border-b border-ink-800 px-6 py-2 text-xs">
-      <summary className="cursor-pointer text-ink-300">
-        Context & usage · {tokens(usedTokens)} reported tokens · {usedTools} tool calls{near ? " · Usage checkpoint near or reached" : ""}
+    <details
+      key={String(blocked)}
+      open={blocked || undefined}
+      className={`border-b px-6 py-2 text-xs ${blocked ? "border-amber-500 bg-amber-950/30" : "border-ink-800"}`}
+    >
+      <summary className={`cursor-pointer ${blocked ? "font-semibold text-amber-300" : "text-ink-300"}`}>
+        Context & usage · {tokens(usedTokens)} reported tokens · {usedTools} tool calls
+        {blocked ? " · ⚠ Blocked: raise the highlighted allowance below to continue" : near ? " · Usage checkpoint near" : ""}
       </summary>
       <div className="mx-auto mt-3 max-w-3xl space-y-3 pb-2">
         <p className="text-ink-300">
@@ -42,12 +55,21 @@ export function EfficiencyPanel({ detail }: { detail: TaskDetail }) {
           {detail.usageSummary?.runs ?? runs.length} runs · {detail.usageSummary?.unreportedRuns ?? 0} runs with unreported usage ·{" "}
           {sessionStart ? `Session age: ${duration(sessionStart, null)}` : "Fresh session on next message"}
         </p>
-        {near && (
-          <p className="text-amber-300">
-            {blocked
-              ? "Checkpoint reached. Review the work and increase the allowance before continuing."
-              : "At least 80% of an allowance has been used. Consider finishing this phase and preparing a handoff."}
-          </p>
+        {blocked ? (
+          <div className="rounded border border-amber-500 p-3 text-amber-200" role="alert">
+            <p className="font-semibold">New runs are blocked by a usage checkpoint.</p>
+            <p className="mt-1">
+              {detail.checkpoint ??
+                `${tokensHit ? `Tokens: ${tokens(usedTokens)} used of ${tokens(task.tokenBudget!)}. ` : ""}${toolsHit ? `Tool calls: ${usedTools} used of ${task.toolBudget}. ` : ""}`}
+            </p>
+            <ol className="mt-2 list-decimal pl-5">
+              <li>Set the highlighted allowance above its current usage, or clear it for unlimited.</li>
+              <li>Click “Save usage controls”.</li>
+              <li>Send a message (or press Retry). No page refresh or server restart is needed.</li>
+            </ol>
+          </div>
+        ) : (
+          near && <p className="text-amber-300">At least 80% of an allowance has been used. Consider finishing this phase and preparing a handoff.</p>
         )}
         <form
           key={`${task.tokenBudget}:${task.toolBudget}:${task.autoCompact}`}
@@ -62,7 +84,7 @@ export function EfficiencyPanel({ detail }: { detail: TaskDetail }) {
           <label>
             Task token allowance
             <input
-              className="mt-1 block rounded bg-ink-800 p-2"
+              className={`mt-1 block rounded bg-ink-800 p-2 ${tokensHit ? hitClass : ""}`}
               aria-label="Task token allowance"
               type="number"
               name="tokens"
@@ -76,7 +98,7 @@ export function EfficiencyPanel({ detail }: { detail: TaskDetail }) {
           <label>
             Task tool-call allowance
             <input
-              className="mt-1 block rounded bg-ink-800 p-2"
+              className={`mt-1 block rounded bg-ink-800 p-2 ${toolsHit ? hitClass : ""}`}
               aria-label="Task tool-call allowance"
               type="number"
               name="tools"
@@ -102,9 +124,17 @@ export function EfficiencyPanel({ detail }: { detail: TaskDetail }) {
         <Button disabled={busy || !task.sessionStarted || blocked} onClick={() => prepare.mutate()}>
           Prepare handoff
         </Button>
-        <span className="ml-2 text-ink-400">Uses one read-only agent run and counts toward the allowance.</span>
+        <span className="ml-2 text-ink-400">
+          {blocked
+            ? `Raise the allowances above current usage (${tokens(usedTokens)} tokens, ${usedTools} tool calls) to prepare a handoff or continue.`
+            : !task.sessionStarted
+              ? task.handoff
+                ? "Handoff in place: your next message starts a fresh session from the summary below."
+                : "No active session to summarize; write a handoff below."
+              : "Uses one read-only agent run and counts toward the allowance."}
+        </span>
         <form
-          key={`${task.id}:${task.handoff}`}
+          key={`${task.id}:${draft}`}
           onSubmit={(e) => {
             e.preventDefault();
             compact.mutate(String(new FormData(e.currentTarget).get("summary")));
@@ -119,7 +149,7 @@ export function EfficiencyPanel({ detail }: { detail: TaskDetail }) {
               name="summary"
               required
               maxLength={6000}
-              defaultValue={task.handoff ?? ""}
+              defaultValue={draft}
               disabled={busy}
               placeholder="Goal and acceptance criteria; constraints; relevant files; changes made; checks completed; remaining work and uncertainties."
             />

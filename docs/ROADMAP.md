@@ -57,8 +57,17 @@ Demo checklist (real Claude Code, on Windows):
 
 ## Phase 3: workflows
 
+- [x] Task stages (backlog → in progress → needs review → approved → closed), `step`/`review` blocks, review runs, grouped board with "Next up": design in [docs/TASK_STATES.md](TASK_STATES.md)
+  - [x] Rollout 1: stage model, migration, owner actions endpoint, stage pill and stage actions on the task page
+  - [x] Rollout 2: `step` block, grouped board, Next-up banner, Inbox groups
+  - [x] Rollout 3: review runs and reviewer resolution
+  - [x] Rollout 4: `plan` block and optional automation
+
 - [ ] Workflow tasks: ordered steps (agent / approval gate / human input), enable/disable, retry with guidance, run from a chosen step without losing history
 - [ ] Each writing task gets its own git worktree and branch; final approval shows the diff and merges; conflicts go to the Inbox with "Resolve with agent". Lifts the one-writer-per-department rule
+  - [x] Persistent task worktrees, isolated runner/reviews, local end-of-run checkpoints and Pause & checkpoint UI; [recovery and rollout](WORKSPACES.md)
+  - [x] GitHub checkpoint pushes and draft PRs, exact-commit approval/check gating and owner-triggered squash merge; manual deploy/revert instructions
+  - [ ] Automatic conflict resolution and worktree cleanup; lift department concurrency limits after integration
 - [ ] Templates: Feature, Bugfix, Balance pass, Content batch; save your own
 - [ ] Promote a chat to a workflow
 - [ ] Review by the reporting line: a role's proposals against another department's documents are reviewed by that department's lead before they reach the owner

@@ -16,6 +16,18 @@ async function send(taskId: string, text: string) {
   return runFinished(app!, result.body.run.id);
 }
 
+it("new tasks take their allowances from Settings", async () => {
+  app = await testApp();
+  const project = await newProject(app);
+  const before = await newTask(app, project, { title: "Before" });
+  expect([before.tokenBudget, before.toolBudget]).toEqual([1_000_000, 80]);
+  const patched = await api(app, "PATCH", "/api/settings", { defaultTokenBudget: 250_000, defaultToolBudget: null });
+  expect(patched.body).toMatchObject({ defaultTokenBudget: 250_000, defaultToolBudget: null });
+  const after = await newTask(app, project, { title: "After" });
+  expect([after.tokenBudget, after.toolBudget]).toEqual([250_000, null]);
+  expect(app.store.getTask(before.id)!.tokenBudget).toBe(1_000_000);
+});
+
 it.each(["claude", "codex"] as const)("%s compaction preserves history and usage but starts a fresh session", async (provider) => {
   app = await testApp();
   const project = await newProject(app);
@@ -100,6 +112,14 @@ it("rejects missing fields, oversized and ambiguous generated handoffs", () => {
   expect(extractHandoff("No summary")).toBeNull();
 });
 
+it("accepts list fields, CRLF line endings and a json label on generated handoffs", () => {
+  const body = { goal: "g", constraints: "c", files: ["a.ts", "b.ts"], completed: "x".repeat(2500), verification: "v", remaining: ["r"] };
+  const parsed = extractHandoff("Done.\r\n\r\n```context-handoff json\r\n" + JSON.stringify(body, null, 2).replace(/\n/g, "\r\n") + "\r\n```\r\n");
+  expect(parsed).toContain("FILES\n- a.ts\n- b.ts");
+  expect(parsed).toContain("REMAINING\n- r");
+  expect(extractHandoff(JSON.stringify(body, null, 2))).toBe(parsed);
+});
+
 it("queues delegation requests in the inbox when the parent exhausts its allowance", async () => {
   app = await testApp();
   const project = await newProject(app);
@@ -109,8 +129,8 @@ it("queues delegation requests in the inbox when the parent exhausts its allowan
   const task = await newTask(app, project, { roleId: qa.id });
   await api(app, "PATCH", `/api/tasks/${task.id}`, { tokenBudget: 1000 });
   app.runner.send(task.id, "Found issue [task:Gameplay Programmer:8]");
-  const { taskReaches } = await import("./helpers.ts");
-  await taskReaches(app, task.id, ["done"]);
+  const { stepFinished } = await import("./helpers.ts");
+  await stepFinished(app, task.id);
   const inbox = await api<{ handoffs: { reason: string }[] }>(app, "GET", "/api/inbox");
   expect(inbox.body.handoffs[0]?.reason).toContain("Usage checkpoint reached");
   expect(app.store.listTasks(project)).toHaveLength(1);

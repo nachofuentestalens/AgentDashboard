@@ -23,6 +23,8 @@ test("create a project, chat with the agent, resume, stop and retry", async ({ p
   await expect(page.getByText("Bash")).toBeVisible();
   await expect(page.getByText("The working tree is clean.")).toBeVisible();
   await expect(page.getByText("Done", { exact: true }).first()).toBeVisible();
+  await expect(page.getByLabel("Task workspace")).toContainText("Isolated branch: agent/task-");
+  await expect(page.getByLabel("Task workspace")).toContainText("Local checkpoint:");
   await expect(page.getByText("Sonnet 5 · medium").first()).toBeVisible();
   await page.getByText("Bash").click();
   await expect(page.getByText("nothing to commit, working tree clean")).toBeVisible();
@@ -35,8 +37,11 @@ test("create a project, chat with the agent, resume, stop and retry", async ({ p
   await page.getByRole("textbox", { name: "Message" }).fill("Long job [slow]");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText(/Still working \(2\)/)).toBeVisible();
-  await page.getByRole("button", { name: "■ Stop" }).click();
+  await page.getByRole("button", { name: "Pause & checkpoint" }).click();
   await expect(page.getByText("Stopped", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save checkpoint" })).toBeEnabled();
+  await page.getByRole("button", { name: "Save checkpoint" }).click();
+  await expect(page.getByLabel("Task workspace")).toContainText("Not published to GitHub.");
   await expect(page.getByRole("button", { name: "↻ Retry" })).toBeVisible();
 
   // The task shows up in the project's list with its cost.

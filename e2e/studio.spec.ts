@@ -43,6 +43,11 @@ test("staff a studio, give a role a task, accept its proposal, watch the queue",
   await expect(proposal).toContainText("Proposed by the fake agent.");
   await page.screenshot({ path: "test-results/inbox.png", fullPage: true });
   await proposal.getByRole("button", { name: "Accept" }).click();
+  // The task's finished step also waits for review.
+  await page
+    .getByRole("article", { name: /^Review:/ })
+    .getByRole("button", { name: "Approve" })
+    .click();
   await expect(page.getByText("Nothing is waiting on you.")).toBeVisible();
 
   await page.goto(`/projects/${projectId}/docs`);
@@ -69,6 +74,41 @@ test("staff a studio, give a role a task, accept its proposal, watch the queue",
   await expect(page.getByText("Nothing is waiting.")).toBeVisible();
 });
 
+test("review a finished step with an agent from the board, fix, approve and close", async ({ page, request }) => {
+  const projectId = await newProject(request, "Stage Coast");
+  await request.post(`/api/projects/${projectId}/studio/template`);
+  const studio = (await (await request.get(`/api/projects/${projectId}/studio`)).json()) as { departments: { roles: { id: string; name: string }[] }[] };
+  const qa = studio.departments.flatMap((d) => d.roles).find((r) => r.name === "QA Tester")!;
+  const created = await request.post(`/api/projects/${projectId}/tasks`, {
+    data: { roleId: qa.id, title: "Dash ability", message: "Add dash [plan] [step-done] [review-changes]" },
+  });
+  const dash = (await created.json()) as { id: string };
+  await request.post(`/api/projects/${projectId}/tasks`, { data: { roleId: qa.id, title: "Later work" } });
+
+  await page.goto(`/projects/${projectId}`);
+  const banner = page.getByLabel("Next up");
+  await expect(banner).toContainText("Dash ability");
+  await expect(page.getByRole("list", { name: "Needs you" })).toContainText("Fake step done.");
+  await expect(page.getByRole("list", { name: "Needs you" })).toContainText("1/3");
+  await expect(page.getByRole("list", { name: "Up next" })).toContainText("Later work");
+  await page.screenshot({ path: "test-results/board.png", fullPage: true });
+
+  // A read-only review by the same role finds a problem; Fix sends it back to the author.
+  await banner.getByRole("button", { name: "Review with QA Tester" }).click();
+  await expect(page.getByRole("list", { name: "Needs you" })).toContainText("Agent review: changes");
+  await page.goto(`/tasks/${dash.id}`);
+  await expect(page.getByText("Agent review (QA Tester): changes requested")).toBeVisible();
+  await expect(page.getByText("Review requested from QA Tester.")).toBeVisible();
+  await page.getByRole("button", { name: "Fix" }).click();
+  await expect(page.getByText("Address these review findings:")).toBeVisible();
+  await expect(page.getByText("Needs review", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByText("Approved", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByText("Closed", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reopen" })).toBeVisible();
+});
+
 test("paste feedback and triage it with the Game Director", async ({ page, request }) => {
   const projectId = await newProject(request, "Feedback Isle");
   await request.post(`/api/projects/${projectId}/studio/template`);
@@ -81,4 +121,45 @@ test("paste feedback and triage it with the Game Director", async ({ page, reque
   await page.getByRole("button", { name: "Triage with Game Director" }).click();
   await expect(page.getByRole("textbox", { name: "Task title" })).toHaveValue("Triage 2 feedback items");
   await expect(page.getByText("(Discord) Upgrades feel slow")).toBeVisible();
+});
+
+test("a desktop alert and the tab title say when something new waits on you", async ({ page, request }) => {
+  // A stand-in Notification records what would be shown, and the window reports no focus, as when
+  // the owner is in another app.
+  await page.addInitScript(() => {
+    const shown: { title: string; body: string }[] = [];
+    (window as unknown as { shown: typeof shown }).shown = shown;
+    class FakeNotification {
+      static permission = "default";
+      static requestPermission() {
+        FakeNotification.permission = "granted";
+        return Promise.resolve("granted");
+      }
+      onclick: (() => void) | null = null;
+      constructor(title: string, options: { body: string }) {
+        shown.push({ title, body: options.body });
+      }
+      close() {}
+    }
+    Object.defineProperty(window, "Notification", { value: FakeNotification });
+    document.hasFocus = () => false;
+  });
+  const projectId = await newProject(request, "Alert Bay");
+  await request.post(`/api/projects/${projectId}/studio/template`);
+  const studio = (await (await request.get(`/api/projects/${projectId}/studio`)).json()) as { departments: { roles: { id: string; name: string }[] }[] };
+  const qa = studio.departments.flatMap((d) => d.roles).find((r) => r.name === "QA Tester")!;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Turn on desktop alerts" }).click();
+  await expect(page.getByRole("button", { name: "Desktop alerts on" })).toBeVisible();
+  const shown = () => page.evaluate(() => (window as unknown as { shown: { body: string }[] }).shown.map((n) => n.body));
+
+  const created = await request.post(`/api/projects/${projectId}/tasks`, {
+    data: { roleId: qa.id, title: "Smoke test the alerts", message: "check [step-done]" },
+  });
+  await expect.poll(shown).toContain('"Smoke test the alerts" is ready for review');
+  await expect(page).toHaveTitle(/^\(\d+\) AgentDashboard$/);
+  // Closing it takes it off the inbox and out of the title count.
+  const task = (await created.json()) as { id: string };
+  await request.patch(`/api/tasks/${task.id}`, { data: { done: true } });
 });

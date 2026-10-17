@@ -19,7 +19,7 @@ import type { Bus } from "./bus.ts";
 import { readDocText, safeDocPath, saveDocs } from "./docs.ts";
 import { HttpError } from "./http.ts";
 import { DECISIONS_DOC } from "./folders.ts";
-import type { Notice, ReplyHandler, Runner } from "./runner.ts";
+import type { Notice, ReplyHandler, ReplyOutcome, Runner } from "./runner.ts";
 import { isHeldReason } from "./scheduler.ts";
 import type { Store } from "./store.ts";
 import { STUDIO_TEMPLATE } from "./template.ts";
@@ -213,20 +213,29 @@ export class Studio implements ReplyHandler {
 
   // ---- what agents ask for at the end of a reply
 
-  afterReply(task: Task, run: Run, reply: string): { notices: Notice[]; waiting: boolean } {
+  afterReply(task: Task, run: Run, reply: string): ReplyOutcome {
     const blocks = parseReplyBlocks(reply);
-    if (blocks.length === 0) return { notices: [], waiting: false };
+    if (blocks.length === 0) return { notices: [], waiting: false, step: null, plan: null };
     const project = this.store.getProject(task.projectId);
-    if (!project) return { notices: [], waiting: false };
+    if (!project) return { notices: [], waiting: false, step: null, plan: null };
     const role = task.roleId ? this.store.getRole(task.roleId) : null;
     const dept = role ? this.store.getDepartment(role.departmentId) : null;
     const notices: Notice[] = [];
     const questions: string[] = [];
+    let step: ReplyOutcome["step"] = null;
+    let plan: ReplyOutcome["plan"] = null;
     let inbox = false;
 
     for (const block of blocks) {
       if (block.type === "invalid") {
         notices.push({ level: "warn", text: `Ignored a \`${block.lang}\` block: ${block.error}` });
+      } else if (block.type === "step") {
+        // Plain chats have no stage, so their step blocks mean nothing. The last block wins.
+        if (task.roleId) step = block;
+      } else if (block.type === "plan") {
+        if (task.roleId) plan = block.steps;
+      } else if (block.type === "review") {
+        // Only a review run's verdict counts, and the runner reads that itself.
       } else if (block.type === "question") {
         questions.push(block.question);
       } else if (block.type === "proposal") {
@@ -302,7 +311,7 @@ export class Studio implements ReplyHandler {
       notices.push({ level: "info", text: "Asked you a question. Answer it in the Inbox or reply below; the task waits until then." });
     }
     if (inbox) this.bus.publish({ type: "inbox_changed" });
-    return { notices, waiting: questions.length > 0 };
+    return { notices, waiting: questions.length > 0, step, plan };
   }
 
   // ---- the owner's inbox
@@ -323,7 +332,12 @@ export class Studio implements ReplyHandler {
         const task = this.store.getTask(run.taskId);
         return task ? [{ run, task, projectName: name(task.projectId) }] : [];
       });
-    return { proposals, handoffs, questions, held, count: proposals.length + handoffs.length + questions.length + held.length };
+    const inStage = (stage: "needs_review" | "changes_requested") =>
+      this.store.tasksInStage(stage).map((task) => ({ task, projectName: name(task.projectId) }));
+    const reviews = inStage("needs_review");
+    const changes = inStage("changes_requested");
+    const count = proposals.length + handoffs.length + questions.length + reviews.length + changes.length + held.length;
+    return { proposals, handoffs, questions, reviews, changes, held, count };
   }
 
   private pendingProposal(id: string): { proposal: Proposal; repo: string } {

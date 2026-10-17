@@ -5,8 +5,8 @@ import { DEFAULT_PRIORITY, resolveChoice, type Provider, type Effort, type Proje
 import { api, keys } from "../api.ts";
 import { Composer } from "../components/Composer.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
-import { ErrorNote, PriorityBadge, PrioritySelect, selectClass, StatusBadge, Toggle } from "../components/ui.tsx";
-import { ago, cost } from "../format.ts";
+import { TaskBoard } from "../components/TaskBoard.tsx";
+import { ErrorNote, PrioritySelect, selectClass, Toggle } from "../components/ui.tsx";
 import { DocsTab } from "./DocsTab.tsx";
 import { FeedbackTab } from "./FeedbackTab.tsx";
 import { ProjectSettings } from "./ProjectSettings.tsx";
@@ -159,31 +159,7 @@ function TasksTab({ project }: { project: Project }) {
       <section>
         <h2 className="mb-2 text-sm font-semibold text-ink-200">Tasks</h2>
         {tasks.data?.length === 0 && <p className="text-sm text-ink-400">No tasks yet. Start a chat above.</p>}
-        <ul className="divide-y divide-ink-800 overflow-hidden rounded-xl border border-ink-800">
-          {tasks.data?.map((t) => (
-            <li key={t.id}>
-              <Link to={`/tasks/${t.id}`} className="flex items-start gap-4 bg-ink-900/40 px-4 py-3 hover:bg-ink-850">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    {t.roleId && <PriorityBadge priority={t.priority} emergency={t.emergency} />}
-                    <span className="truncate text-sm font-medium text-ink-100">{t.title}</span>
-                    {!t.canEdit && <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[10px] text-ink-300 uppercase">read-only</span>}
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-ink-400">
-                    {t.roleId && <span className="text-ink-300">{roleName(t.roleId) ?? "Role"} · </span>}
-                    {t.lastMessage}
-                  </p>
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  <StatusBadge status={t.status} />
-                  <span className="text-xs text-ink-400">
-                    {ago(t.updatedAt)} · {cost(t.costUsd)}
-                  </span>
-                </div>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        {tasks.data && <TaskBoard tasks={tasks.data} roleName={roleName} />}
       </section>
     </div>
   );

@@ -91,15 +91,50 @@ export interface Project {
   defaultModel: string;
   defaultEffort: Effort;
   allowedTools: string[];
+  // Task stage automation, all off by default (docs/TASK_STATES.md). The owner still approves.
+  autoReview: boolean;
+  // 0: off. Else how many steps in a row may continue after a passed agent review.
+  autoContinueSteps: number;
+  startNextWhenIdle: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
 export type TaskKind = "chat" | "workflow";
 // idle: waiting for the next message; queued: a run waits for the scheduler; running: an agent is
-// working; waiting: the agent asked the owner a question; done: a role's task finished its work;
-// failed/interrupted: the last run did not finish and can be retried.
+// working; waiting: the agent asked the owner a question; done: the owner marked a plain chat done
+// (role tasks use stage "closed" instead); failed/interrupted: the last run did not finish and can be retried.
 export type TaskStatus = "idle" | "queued" | "running" | "waiting" | "done" | "failed" | "interrupted";
+
+// Progress through a role task's work, independent of TaskStatus (which activity is happening
+// right now). Null for plain chats, which have no stage. See docs/TASK_STATES.md.
+export type TaskStage = "backlog" | "in_progress" | "needs_review" | "in_review" | "changes_requested" | "approved" | "closed";
+
+export type StepState = "done" | "partial" | "complete";
+
+// One step of the plan an agent gave for its task.
+export interface TaskStep {
+  id: string;
+  taskId: string;
+  ord: number;
+  title: string;
+  state: "pending" | "active" | "done";
+  summary: string | null;
+  // The run that finished it.
+  runId: string | null;
+}
+
+export interface TaskReview {
+  id: string;
+  taskId: string;
+  // The review run, null for the owner's own review.
+  runId: string | null;
+  // "owner" or a role id.
+  reviewer: string;
+  verdict: "pass" | "changes" | "approved";
+  findings: string[];
+  createdAt: string;
+}
 
 export const MIN_PRIORITY = 0;
 export const MAX_PRIORITY = 10;
@@ -145,6 +180,19 @@ export interface Task {
   createdByRoleId: string | null;
   // The open question the agent asked, while the status is waiting.
   question: string | null;
+  // Null for plain chats (roleId null). Set by the server through stages.ts, never written directly.
+  stage: TaskStage | null;
+  // Null: the role's default reviewer, else the role itself.
+  reviewerRoleId: string | null;
+  // What the agent reported in its last step block ("complete": it thinks the whole task is done).
+  stepState: StepState | null;
+  stepSummary: string | null;
+  nextStep: string | null;
+  stageChangedAt: string | null;
+  // HEAD when the first work run was queued: reviews diff the work against it.
+  baseCommit: string | null;
+  // Steps continued automatically since the owner last acted, against the project's limit.
+  autoContinues: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -160,7 +208,8 @@ export interface Usage {
 
 export interface Run {
   toolCalls: number;
-  purpose: "work" | "handoff";
+  // review: a read-only run by the reviewer role, in its own fresh session (docs/TASK_STATES.md).
+  purpose: "work" | "handoff" | "review";
   id: string;
   taskId: string;
   messageId: string;
@@ -197,17 +246,43 @@ export interface Message {
   createdAt: string;
 }
 
+export interface TaskWorkspace {
+  taskId: string;
+  repoPath: string;
+  path: string;
+  branch: string;
+  baseCommit: string;
+  checkpointCommit: string | null;
+  checkpointAt: string | null;
+  publishedCommit: string | null;
+  githubRepo: string | null;
+  pullRequestUrl: string | null;
+  publishError: string | null;
+  mergeCommit: string | null;
+  approvedCommit: string | null;
+  error: string | null;
+}
+
 export interface TaskDetail {
   task: Task;
   messages: Message[];
   runs: Run[];
   usageSummary?: { tokens: number; toolCalls: number; runs: number; unreportedRuns: number };
+  // Why new runs are blocked, including limits inherited from parent tasks; null when none is reached.
+  checkpoint?: string | null;
+  // Owner and agent reviews of a role task, oldest first.
+  reviews?: TaskReview[];
+  steps?: TaskStep[];
+  workspace?: TaskWorkspace | null;
 }
 
 export interface TaskSummary extends Task {
   messageCount: number;
   lastMessage: string | null;
   costUsd: number;
+  lastReview: Pick<TaskReview, "verdict" | "reviewer"> | null;
+  // The agent's plan, when it gave one.
+  steps: { done: number; total: number } | null;
 }
 
 export interface Settings {
@@ -221,9 +296,14 @@ export interface Settings {
   maxConcurrentRuns: number;
   // Spend over the last 24 hours after which role tasks wait. Null: no limit.
   dailyBudgetUsd: number | null;
+  // Allowances new tasks start with (tasks keep their own copy). Null: unlimited.
+  defaultTokenBudget: number | null;
+  defaultToolBudget: number | null;
 }
 
 export const DEFAULT_MAX_CONCURRENT_RUNS = 1;
+export const DEFAULT_TASK_TOKEN_BUDGET = 1_000_000;
+export const DEFAULT_TASK_TOOL_BUDGET = 80;
 
 // ---- studio: departments, roles and the agents staffing them
 
@@ -262,6 +342,8 @@ export interface Role {
   allowedTools: string[] | null;
   // Design documents included in full in every run, not just listed.
   contextDocs: string[];
+  // Null: a task reviews with its own role in a fresh session (the default).
+  reviewerRoleId: string | null;
   sort: number;
   createdAt: string;
   updatedAt: string;
@@ -403,6 +485,9 @@ export interface Inbox {
   proposals: (Proposal & { projectName: string; current: string | null })[];
   handoffs: (Handoff & { projectName: string })[];
   questions: InboxQuestion[];
+  // Role tasks whose finished step waits for the owner, and those with changes to send back.
+  reviews: InboxQuestion[];
+  changes: InboxQuestion[];
   // Queued runs held back by a budget or an emergency, which the owner can run anyway.
   held: InboxRun[];
   count: number;

@@ -4,16 +4,18 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
 
 ## Layout
 
-- `shared/`: types (`models.ts`), zod request schemas (`schemas.ts`), the stream-json parser (`parser.ts`), the transcript reducer (`transcript.ts`), the reply-block parser (`blocks.ts`: `task` / `proposal` / `question`) and a line diff (`diff.ts`). Pure code, used by both server and web. Imported as TypeScript source (`@ad/shared`); there is no build step.
+- `shared/`: types (`models.ts`), zod request schemas (`schemas.ts`), the stream-json parser (`parser.ts`), the transcript reducer (`transcript.ts`), the reply-block parser (`blocks.ts`: `task` / `proposal` / `question` / `step` / `plan` / `review`), a line diff (`diff.ts`) and the inbox items that trigger desktop alerts (`attention.ts`, used by `web/src/attention.ts`). Pure code, used by both server and web. Imported as TypeScript source (`@ad/shared`); there is no build step.
 - `server/`: Fastify API run with tsx.
   - `app.ts`: core routes, the loopback/origin guard, SSE `/api/events`, static web serving. `studio-routes.ts`: departments, roles, agents, docs, inbox, compute, feedback.
   - `store.ts`: **all SQL**. `db.ts`: `node:sqlite` connection and append-only migrations.
   - `runner.ts`: spawns `claude`, records events to `runs/<id>.jsonl`, settles run outcomes, stop/retry, one run per task. Plain chats start at once; role tasks are queued and started by a scheduling pass.
+  - `stages.ts`: the pure function for role task stages (backlog → in_progress → needs_review → approved → closed, see `docs/TASK_STATES.md`). `runner.ts` applies it on run start/finish and owner actions (`POST /api/tasks/:id/actions`); change transitions here and in its table test. Plain chats have no stage. Review runs (`purpose: "review"`) run as the reviewer role, read-only, in their own session (`actorTask` in `runner.ts`); `step`, `plan` and `review` reply blocks report progress, never approval.
   - `scheduler.ts`: the pure function deciding which queued runs start (slots, budgets, one writer per department, fair share by weight, priority, emergencies). Change rules here and in its table test.
   - `studio.ts`: the studio service: template, structure views, acting on reply blocks, inbox decisions, compute view, feedback triage. `template.ts`: the default studio.
   - `folders.ts`: department folders → Claude Code permission rules. `prompts.ts`: the role preamble and the per-turn studio context. `docs.ts`: design documents under `design/` and their commits.
   - `claude.ts`: finds the CLI (PATH, `claude.exe`, npm `.cmd` shims) and builds its arguments.
   - `git.ts`: repository checks and commits. `fake/fake-claude.mjs`: the stand-in agent for tests and demo mode.
+  - `workspaces.ts`: persistent per-task Git worktrees and server-owned checkpoints. `github.ts`: branch publication, draft PRs and checked owner-triggered squash merges; see `docs/WORKSPACES.md` for authentication, baseline requirements, recovery and deployment.
 - `web/`: React 19 + Vite + Tailwind 4 + TanStack Query + React Router. `live.ts` applies server pushes to the query cache.
 - `e2e/`: Playwright tests against the built app with the fake agent.
 - `docs/ROADMAP.md`: phases and progress. Update its checkboxes when an item lands.

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Agent, DocDetail, DesignDoc, FeedbackItem, Inbox, Role, Run, Studio, Task } from "@ad/shared";
 import type { App } from "../src/app.ts";
-import { api, git, gitRepo, latestRun, newProject, newTask, reply, taskReaches, tempDir, testApp, waitFor } from "./helpers.ts";
+import { api, git, gitRepo, latestRun, newProject, newTask, reply, stepFinished, taskReaches, tempDir, testApp, waitFor } from "./helpers.ts";
 
 const apps: App[] = [];
 afterEach(async () => {
@@ -28,7 +28,9 @@ const roleTask = async (app: App, projectId: string, role: Role, message: string
   newTask(app, projectId, { roleId: role.id, message, ...extra });
 
 const notices = (app: App, runId: string) =>
-  app.runner.readEvents(runId).flatMap((e) => (e.event.kind === "notice" && !e.event.text.startsWith("Task assessment:") ? [e.event] : []));
+  app.runner
+    .readEvents(runId)
+    .flatMap((e) => (e.event.kind === "notice" && !/^(Task assessment:|Isolated worktree:|Saved local checkpoint)/.test(e.event.text) ? [e.event] : []));
 
 describe("studio structure", () => {
   it("applies the template once, with departments, roles and staffed seats", async () => {
@@ -56,7 +58,7 @@ describe("studio structure", () => {
     expect(hired.body.name).toBe("QA Tester 2");
 
     const task = await roleTask(app, projectId, qa, "check the build");
-    await taskReaches(app, task.id, ["done"]);
+    await stepFinished(app, task.id);
     const worker = latestRun(app, task.id).agentId!;
     const staff = app.store.listAgents(projectId).filter((a) => a.roleId === qa.id);
     expect(staff.map((a) => a.id)).toContain(hired.body.id);
@@ -87,7 +89,7 @@ describe("role tasks", () => {
     const task = await roleTask(app, projectId, role("QA Tester"), "Check the build [args] [sysprompt] [context]");
     expect(["queued", "running"]).toContain(task.status);
     expect(task.canEdit).toBe(true);
-    const done = await taskReaches(app, task.id, ["done"]);
+    const done = await stepFinished(app, task.id);
     const run = latestRun(app, task.id);
     expect(run).toMatchObject({ status: "succeeded", model: "claude-sonnet-5", effort: "low", roleId: role("QA Tester").id });
     expect(run.agentId).toBe(done.agentId);
@@ -120,7 +122,7 @@ describe("role tasks", () => {
     const app = await start();
     const { projectId, role } = await studioProject(app);
     const task = await roleTask(app, projectId, role("Gameplay Programmer"), "Fix it [args]");
-    await taskReaches(app, task.id, ["done"]);
+    await stepFinished(app, task.id);
     const args = reply(app, task.id);
     expect(args).toContain('"--permission-mode","acceptEdits"');
     expect(args).toContain('"--disallowedTools","Edit(./design/studio/**)","Edit(./design/game/**)","Edit(./qa/**)","Edit(./design/decisions.md)"');
@@ -139,10 +141,10 @@ describe("role tasks", () => {
     expect(latestRun(app, second.id).waitReason).toMatch(/Engineering already has an agent editing files/);
     // Another department's writer is not held up.
     const qa = await roleTask(app, projectId, role("QA Tester"), "review");
-    await taskReaches(app, qa.id, ["done"]);
+    await stepFinished(app, qa.id);
 
     await api(app, "POST", `/api/runs/${latestRun(app, first.id).id}/stop`);
-    await taskReaches(app, second.id, ["done"]);
+    await stepFinished(app, second.id);
   });
 
   it("starts higher priorities first when slots are scarce", async () => {
@@ -187,8 +189,8 @@ describe("role tasks", () => {
     expect(app.store.getTask(waiting.id)!.status).toBe("queued");
     expect((await api<Studio>(app, "GET", `/api/projects/${projectId}/studio`)).body.emergencies).toEqual([{ taskId: fire.id, title: fire.title }]);
 
-    expect((await api<Task>(app, "PATCH", `/api/tasks/${fire.id}`, { done: true })).body.status).toBe("done");
-    await taskReaches(app, waiting.id, ["done"]);
+    expect((await api<Task>(app, "PATCH", `/api/tasks/${fire.id}`, { done: true })).body).toMatchObject({ status: "idle", stage: "closed" });
+    await stepFinished(app, waiting.id);
   });
 
   it("lets agents raise emergencies for other roles", async () => {
@@ -196,10 +198,10 @@ describe("role tasks", () => {
     const { projectId, role } = await studioProject(app);
     await api(app, "PATCH", `/api/departments/${role("QA Tester").departmentId}`, { autonomy: "auto" });
     const reporter = await roleTask(app, projectId, role("QA Tester"), "The build is red [emergency:Gameplay Programmer]");
-    await taskReaches(app, reporter.id, ["done"]);
+    await stepFinished(app, reporter.id);
     const emergency = app.store.listTasks(projectId).find((t) => t.emergency)!;
     expect(emergency).toMatchObject({ priority: 10, roleId: role("Gameplay Programmer").id, parentTaskId: reporter.id, depth: 1 });
-    await taskReaches(app, emergency.id, ["done"]);
+    await stepFinished(app, emergency.id);
     expect(app.store.openEmergencies(projectId)).toEqual([]);
   });
 
@@ -209,14 +211,14 @@ describe("role tasks", () => {
     const qa = role("QA Tester");
     await api(app, "PATCH", `/api/departments/${qa.departmentId}`, { dailyBudgetUsd: 1 });
     const expensive = await roleTask(app, projectId, qa, "big check [cost:1.5]");
-    await taskReaches(app, expensive.id, ["done"]);
+    await stepFinished(app, expensive.id);
     const next = await roleTask(app, projectId, qa, "another check");
     await waitFor(() => !!latestRun(app, next.id).waitReason);
     expect(latestRun(app, next.id).waitReason).toMatch(/QA reached its daily budget \(\$1\.50 of \$1\.00\)/);
     const inbox = (await api<Inbox>(app, "GET", "/api/inbox")).body;
     expect(inbox.held.map((h) => h.task.id)).toEqual([next.id]);
     expect((await api<Run>(app, "POST", `/api/runs/${latestRun(app, next.id).id}/force`)).status).toBe(200);
-    await taskReaches(app, next.id, ["done"]);
+    await stepFinished(app, next.id);
   });
 
   it("keeps queued runs across a restart and starts them", async () => {
@@ -233,8 +235,8 @@ describe("role tasks", () => {
 
     const second = await start(dataDir);
     expect(second.store.getRun(latestRun(second, chat.id).id)!.status).toBe("interrupted");
-    expect(["queued", "running", "done"]).toContain(second.store.getTask(queued.id)!.status);
-    await taskReaches(second, queued.id, ["done"]);
+    expect(["queued", "running", "idle"]).toContain(second.store.getTask(queued.id)!.status);
+    await stepFinished(second, queued.id);
   });
 });
 
@@ -244,22 +246,22 @@ describe("what agents ask for", () => {
     const { projectId, role } = await studioProject(app);
     await api(app, "PATCH", `/api/departments/${role("QA Tester").departmentId}`, { autonomy: "auto" });
     const qa = await roleTask(app, projectId, role("QA Tester"), "Found a bug [task:Gameplay Programmer:8]");
-    await taskReaches(app, qa.id, ["done"]);
+    await stepFinished(app, qa.id);
     const created = app.store.listTasks(projectId).find((t) => t.parentTaskId === qa.id)!;
     expect(created).toMatchObject({ roleId: role("Gameplay Programmer").id, priority: 8, depth: 1, createdByRoleId: role("QA Tester").id });
     expect(notices(app, latestRun(app, qa.id).id).find((n) => n.text.startsWith("Created task"))!.text).toMatch(
       /Created task "Follow-up for Gameplay Programmer" for Gameplay Programmer \(priority 8\/10\)/,
     );
-    await taskReaches(app, created.id, ["done"]);
+    await stepFinished(app, created.id);
   });
 
   it("sends tasks to the inbox when the department asks first, the role is unknown or delegation is too deep", async () => {
     const app = await start();
     const { projectId, role } = await studioProject(app);
     const designer = await roleTask(app, projectId, role("Systems Designer"), "Ready [task:Gameplay Programmer:3] [task:Composer]");
-    await taskReaches(app, designer.id, ["done"]);
+    await stepFinished(app, designer.id);
     const deep = app.studio.createTask({ projectId, roleId: role("QA Tester").id, title: "deep", message: "go [task:Gameplay Programmer]", depth: 2 });
-    await taskReaches(app, deep.id, ["done"]);
+    await stepFinished(app, deep.id);
 
     // Higher priorities first, then oldest.
     const inbox = (await api<Inbox>(app, "GET", "/api/inbox")).body;
@@ -284,7 +286,7 @@ describe("what agents ask for", () => {
     const app = await start();
     const { projectId, repo, role } = await studioProject(app);
     const task = await roleTask(app, projectId, role("Gameplay Programmer"), "Spec is unclear [proposal:design/game/combat.md] [proposal:../escape.md]");
-    await taskReaches(app, task.id, ["done"]);
+    await stepFinished(app, task.id);
     const shown = notices(app, latestRun(app, task.id).id);
     expect(shown.map((n) => n.level)).toEqual(["info", "warn"]);
 
@@ -303,11 +305,11 @@ describe("what agents ask for", () => {
     expect(git(repo, "status", "--porcelain")).toBe("");
 
     const again = await roleTask(app, projectId, role("Gameplay Programmer"), "Try again [proposal:design/game/loot.md]");
-    await taskReaches(app, again.id, ["done"]);
+    await stepFinished(app, again.id);
     const proposal = app.store.pendingProposals()[0]!;
     await api(app, "POST", `/api/proposals/${proposal.id}/reject`, { reason: "Loot is out of scope" });
     await waitFor(() => app.store.listMessages(again.id).some((m) => m.text.includes("rejected your proposal for design/game/loot.md: Loot is out of scope")));
-    await taskReaches(app, again.id, ["done"]);
+    await stepFinished(app, again.id);
     expect((await api(app, "POST", `/api/proposals/${proposal.id}/accept`, {})).status).toBe(409);
   });
 
@@ -322,7 +324,7 @@ describe("what agents ask for", () => {
 
     const answered = await api<{ run: Run }>(app, "POST", `/api/tasks/${task.id}/answer`, { text: "Yes, a small one.", record: true });
     expect(answered.status).toBe(201);
-    await taskReaches(app, task.id, ["done"]);
+    await stepFinished(app, task.id);
     expect(app.store.getTask(task.id)!.question).toBeNull();
     expect(fs.readFileSync(path.join(repo, "design", "decisions.md"), "utf8")).toMatch(
       /Systems Designer asked:\n\n> Should the warrior use a shield\?\n\nThe owner answered:\n\nYes, a small one\./,
@@ -374,7 +376,7 @@ describe("feedback", () => {
     expect(triage.body).toMatchObject({ title: "Triage 2 feedback items", roleId: director.id });
     const items = (await api<FeedbackItem[]>(app, "GET", `/api/projects/${projectId}/feedback`)).body;
     expect(items.every((f) => f.status === "triaged" && f.taskId === triage.body.id)).toBe(true);
-    await taskReaches(app, triage.body.id, ["done"]);
+    await stepFinished(app, triage.body.id);
     expect(app.store.listMessages(triage.body.id)[0]!.text).toContain("1. (Steam) The lighthouse upgrades feel slow");
   });
 });

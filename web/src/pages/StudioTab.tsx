@@ -304,8 +304,10 @@ function RoleEditor({
   const [tools, setTools] = useState(role?.allowedTools?.join("\n") ?? "");
   const [docs, setDocs] = useState(role?.contextDocs.join("\n") ?? "");
   const [brief, setBrief] = useState(role?.brief ?? "");
+  const [reviewer, setReviewer] = useState(role?.reviewerRoleId ?? "");
 
   const body = (): UpdateRoleBody => ({
+    reviewerRoleId: reviewer || null,
     name: name.trim(),
     departmentId: dept,
     provider: provider || null,
@@ -387,6 +389,20 @@ function RoleEditor({
                   {effortCost(level)}
                 </option>
               ))}
+            </select>
+          </Field>
+          <Field label="Reviewer" hint="Who reviews this role's steps when you ask for a review. Tasks can override it.">
+            <select aria-label="Role reviewer" className={inputClass} value={reviewer} onChange={(e) => setReviewer(e.target.value)}>
+              <option value="">The same role, in a fresh session</option>
+              {departments.flatMap((d) =>
+                d.roles
+                  .filter((r) => r.id !== role?.id)
+                  .map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({d.name})
+                    </option>
+                  )),
+              )}
             </select>
           </Field>
         </div>

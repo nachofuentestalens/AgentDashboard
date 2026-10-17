@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { NavLink, Outlet, useMatch } from "react-router";
 import { api, keys } from "../api.ts";
+import { useAttention, useDesktopAlerts } from "../attention.ts";
 import { useLiveUpdates } from "../live.ts";
 import { NewProjectContext } from "../newProject.ts";
 import { NewProjectDialog } from "../pages/NewProjectDialog.tsx";
@@ -16,6 +17,8 @@ export function Layout() {
   const task = useQuery({ queryKey: keys.task(taskMatch?.params.taskId ?? ""), queryFn: () => api.task(taskMatch!.params.taskId!), enabled: !!taskMatch });
   const activeProjectId = task.data?.task.projectId;
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: api.inbox });
+  const alerts = useDesktopAlerts();
+  useAttention(inbox.data, alerts.state);
   const navClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center justify-between rounded-md px-2 py-1.5 text-sm ${isActive ? "bg-ink-800 text-ink-100" : "text-ink-300 hover:bg-ink-850 hover:text-ink-100"}`;
 
@@ -60,6 +63,22 @@ export function Layout() {
                 </span>
               )}
             </NavLink>
+            {alerts.state !== "unsupported" && (
+              <button
+                type="button"
+                className="w-full rounded-md px-2 py-1 text-left text-[11px] text-ink-400 hover:bg-ink-850 hover:text-ink-200 disabled:hover:bg-transparent"
+                onClick={alerts.toggle}
+                disabled={alerts.state === "blocked"}
+                aria-pressed={alerts.state === "on"}
+                title={
+                  alerts.state === "blocked"
+                    ? "This browser blocks notifications for the dashboard. Allow them in the site settings."
+                    : "A desktop notification when something new waits on you and the dashboard is not in front"
+                }
+              >
+                {alerts.state === "on" ? "🔔 Desktop alerts on" : alerts.state === "blocked" ? "🔕 Desktop alerts blocked" : "🔕 Turn on desktop alerts"}
+              </button>
+            )}
             <NavLink to="/compute" className={navClass}>
               Compute
             </NavLink>

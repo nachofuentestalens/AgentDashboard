@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
-import type { RunStatus, TaskStatus } from "@ad/shared";
+import type { RunStatus, TaskStage, TaskStatus } from "@ad/shared";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 
@@ -40,6 +40,23 @@ export function StatusBadge({ status }: { status: TaskStatus | RunStatus }) {
       {s.label}
     </span>
   );
+}
+
+const stageStyle: Record<TaskStage, { label: string; className: string }> = {
+  backlog: { label: "Backlog", className: "bg-ink-800 text-ink-300" },
+  in_progress: { label: "In progress", className: "bg-sky-500/15 text-sky-300" },
+  needs_review: { label: "Needs review", className: "bg-gold/15 text-gold" },
+  in_review: { label: "In review", className: "bg-violet-500/15 text-violet-300" },
+  changes_requested: { label: "Changes requested", className: "bg-amber-500/15 text-amber-300" },
+  approved: { label: "Approved", className: "bg-emerald-500/15 text-emerald-300" },
+  closed: { label: "Closed", className: "bg-ink-800 text-ink-400" },
+};
+
+// Where a role task is in its work, next to the activity badge. Plain chats have no stage.
+export function StageBadge({ stage }: { stage: TaskStage | null }) {
+  if (!stage) return null;
+  const s = stageStyle[stage];
+  return <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase ${s.className}`}>{s.label}</span>;
 }
 
 // A task's priority (0-10), and the emergency flag that outranks it.

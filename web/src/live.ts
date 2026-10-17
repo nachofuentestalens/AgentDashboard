@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import type { QueryClient } from "@tanstack/react-query";
-import type { ServerPush, StampedEvent, TaskDetail } from "@ad/shared";
+import type { Run, ServerPush, StampedEvent, TaskDetail } from "@ad/shared";
 import { api, keys } from "./api.ts";
+
+export const RUN_FINISHED = "ad:run-finished";
 
 // Events that arrived over the live stream, per run. A run's events query merges these with what it
 // fetched, so an event pushed while the fetch was in flight is not lost.
@@ -58,6 +60,8 @@ export function useLiveUpdates(qc: QueryClient): Connection {
             return { ...old, runs: exists ? old.runs.map((r) => (r.id === run.id ? run : r)) : [...old.runs, run] };
           });
           if (run.status !== "running") {
+            // Desktop alerts (attention.ts) announce finished turns.
+            if (run.status !== "queued") window.dispatchEvent(new CustomEvent<Run>(RUN_FINISHED, { detail: run }));
             void qc.invalidateQueries({ queryKey: ["task"] });
             // The stored file now holds every event; the buffer is no longer needed.
             setTimeout(() => buffers.delete(run.id), 30_000);

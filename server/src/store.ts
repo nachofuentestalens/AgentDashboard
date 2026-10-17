@@ -3,6 +3,8 @@ import {
   DEFAULT_ALLOWED_TOOLS,
   DEFAULT_EFFORT,
   DEFAULT_MAX_CONCURRENT_RUNS,
+  DEFAULT_TASK_TOKEN_BUDGET,
+  DEFAULT_TASK_TOOL_BUDGET,
   DEFAULT_MODEL,
   DEFAULT_PRIORITY,
   DEFAULT_PROVIDER,
@@ -29,6 +31,10 @@ import {
   type RunStatus,
   type Settings,
   type Task,
+  type TaskWorkspace,
+  type TaskReview,
+  type TaskStage,
+  type TaskStep,
   type TaskStatus,
   type TaskSummary,
   type Usage,
@@ -43,6 +49,8 @@ const optEffort = (v: unknown): Effort | null => (v == null ? null : asEffort(v)
 const optProvider = (v: unknown): Provider | null => (isProvider(v) ? v : null);
 const str = (v: unknown): string | null => (v as string | null) ?? null;
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
+// Unset: the built-in default. An empty string: cleared, meaning unlimited.
+const allowance = (v: string | undefined, fallback: number): number | null => (v === undefined ? fallback : v === "" ? null : Number(v));
 
 function parseJson<T>(text: unknown, fallback: T): T {
   try {
@@ -65,6 +73,9 @@ const toProject = (r: Row): Project => ({
   defaultModel: r.default_model as string,
   defaultEffort: asEffort(r.default_effort),
   allowedTools: parseJson<string[]>(r.allowed_tools, []),
+  autoReview: r.auto_review === 1,
+  autoContinueSteps: Number(r.auto_continue_steps ?? 0),
+  startNextWhenIdle: r.start_next_when_idle === 1,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
 });
@@ -95,6 +106,14 @@ const toTask = (r: Row): Task => ({
   depth: Number(r.depth ?? 0),
   createdByRoleId: str(r.created_by_role_id),
   question: str(r.question),
+  stage: (r.stage as Task["stage"]) ?? null,
+  reviewerRoleId: str(r.reviewer_role_id),
+  stepState: (r.step_state as Task["stepState"]) ?? null,
+  stepSummary: str(r.step_summary),
+  nextStep: str(r.next_step),
+  stageChangedAt: str(r.stage_changed_at),
+  baseCommit: str(r.base_commit),
+  autoContinues: Number(r.auto_continues ?? 0),
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
 });
@@ -110,7 +129,7 @@ const toMessage = (r: Row): Message => ({
 
 const toRun = (r: Row): Run => ({
   toolCalls: Number(r.tool_calls ?? 0),
-  purpose: r.purpose === "handoff" ? "handoff" : "work",
+  purpose: r.purpose === "handoff" || r.purpose === "review" ? r.purpose : "work",
   id: r.id as string,
   taskId: r.task_id as string,
   messageId: r.message_id as string,
@@ -156,6 +175,7 @@ const toRole = (r: Row): Role => ({
   canEdit: r.can_edit === 1,
   allowedTools: r.allowed_tools == null ? null : parseJson<string[]>(r.allowed_tools, []),
   contextDocs: parseJson<string[]>(r.context_docs, []),
+  reviewerRoleId: str(r.reviewer_role_id),
   sort: Number(r.sort),
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
@@ -234,6 +254,14 @@ export type TaskPatch = Partial<
     | "autoCompact"
     | "tokenBudget"
     | "toolBudget"
+    | "stage"
+    | "reviewerRoleId"
+    | "stepState"
+    | "stepSummary"
+    | "nextStep"
+    | "stageChangedAt"
+    | "baseCommit"
+    | "autoContinues"
   >
 >;
 
@@ -270,6 +298,8 @@ export class Store {
       defaultEffort: asEffort(map.get("defaultEffort") ?? DEFAULT_EFFORT),
       maxConcurrentRuns: Number(map.get("maxConcurrentRuns")) || DEFAULT_MAX_CONCURRENT_RUNS,
       dailyBudgetUsd: budget ? Number(budget) : null,
+      defaultTokenBudget: allowance(map.get("defaultTokenBudget"), DEFAULT_TASK_TOKEN_BUDGET),
+      defaultToolBudget: allowance(map.get("defaultToolBudget"), DEFAULT_TASK_TOOL_BUDGET),
     };
   }
 
@@ -318,16 +348,34 @@ export class Store {
 
   updateProject(
     id: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "defaultProvider" | "defaultModel" | "defaultEffort" | "allowedTools">>,
+    patch: Partial<
+      Pick<
+        Project,
+        "name" | "repoPath" | "defaultProvider" | "defaultModel" | "defaultEffort" | "allowedTools" | "autoReview" | "autoContinueSteps" | "startNextWhenIdle"
+      >
+    >,
   ): Project | null {
     const current = this.getProject(id);
     if (!current) return null;
     const next = merge(current, patch);
     this.db
       .prepare(
-        "UPDATE projects SET name = ?, repo_path = ?, default_provider = ?, default_model = ?, default_effort = ?, allowed_tools = ?, updated_at = ? WHERE id = ?",
+        `UPDATE projects SET name = ?, repo_path = ?, default_provider = ?, default_model = ?, default_effort = ?, allowed_tools = ?, auto_review = ?,
+           auto_continue_steps = ?, start_next_when_idle = ?, updated_at = ? WHERE id = ?`,
       )
-      .run(next.name, next.repoPath, next.defaultProvider, next.defaultModel, next.defaultEffort, JSON.stringify(next.allowedTools), now(), id);
+      .run(
+        next.name,
+        next.repoPath,
+        next.defaultProvider,
+        next.defaultModel,
+        next.defaultEffort,
+        JSON.stringify(next.allowedTools),
+        next.autoReview ? 1 : 0,
+        next.autoContinueSteps,
+        next.startNextWhenIdle ? 1 : 0,
+        now(),
+        id,
+      );
     return this.getProject(id);
   }
 
@@ -343,7 +391,10 @@ export class Store {
         `SELECT t.*,
            (SELECT COUNT(*) FROM messages m WHERE m.task_id = t.id) AS message_count,
            (SELECT m.text FROM messages m WHERE m.task_id = t.id ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) AS last_message,
-           (SELECT COALESCE(SUM(r.cost_usd), 0) FROM runs r WHERE r.task_id = t.id) AS cost_usd
+           (SELECT COALESCE(SUM(r.cost_usd), 0) FROM runs r WHERE r.task_id = t.id) AS cost_usd,
+           (SELECT v.verdict || ':' || v.reviewer FROM task_reviews v WHERE v.task_id = t.id ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1) AS last_review,
+           (SELECT COUNT(*) FROM task_steps s WHERE s.task_id = t.id) AS steps_total,
+           (SELECT COUNT(*) FROM task_steps s WHERE s.task_id = t.id AND s.state = 'done') AS steps_done
          FROM tasks t WHERE t.project_id = ? ORDER BY t.updated_at DESC`,
       )
       .all(projectId) as Row[];
@@ -352,7 +403,48 @@ export class Store {
       messageCount: Number(r.message_count),
       lastMessage: str(r.last_message),
       costUsd: Number(r.cost_usd),
+      lastReview: r.last_review
+        ? {
+            verdict: String(r.last_review).split(":")[0] as TaskReview["verdict"],
+            reviewer: String(r.last_review).split(":").slice(1).join(":"),
+          }
+        : null,
+      steps: Number(r.steps_total) > 0 ? { done: Number(r.steps_done), total: Number(r.steps_total) } : null,
     }));
+  }
+
+  // ---- task steps (an agent's plan)
+
+  listTaskSteps(taskId: string): TaskStep[] {
+    const rows = this.db.prepare("SELECT * FROM task_steps WHERE task_id = ? ORDER BY ord").all(taskId) as Row[];
+    return rows.map((r) => ({
+      id: r.id as string,
+      taskId: r.task_id as string,
+      ord: Number(r.ord),
+      title: r.title as string,
+      state: r.state as TaskStep["state"],
+      summary: str(r.summary),
+      runId: str(r.run_id),
+    }));
+  }
+
+  // A new plan replaces the steps not done yet; finished ones stay as history.
+  replanTask(taskId: string, titles: string[]): void {
+    transaction(this.db, () => {
+      this.db.prepare("DELETE FROM task_steps WHERE task_id = ? AND state <> 'done'").run(taskId);
+      const row = this.db.prepare("SELECT COALESCE(MAX(ord), -1) AS n FROM task_steps WHERE task_id = ?").get(taskId) as Row;
+      const insert = this.db.prepare("INSERT INTO task_steps (id, task_id, ord, title, state, summary, run_id) VALUES (?, ?, ?, ?, ?, NULL, NULL)");
+      titles.forEach((title, i) => insert.run(randomUUID(), taskId, Number(row.n) + 1 + i, title, i === 0 ? "active" : "pending"));
+    });
+  }
+
+  // The active step is finished: record it and make the next one active.
+  finishActiveStep(taskId: string, summary: string | null, runId: string): void {
+    transaction(this.db, () => {
+      this.db.prepare("UPDATE task_steps SET state = 'done', summary = ?, run_id = ? WHERE task_id = ? AND state = 'active'").run(summary, runId, taskId);
+      const next = this.db.prepare("SELECT id FROM task_steps WHERE task_id = ? AND state = 'pending' ORDER BY ord LIMIT 1").get(taskId) as Row | undefined;
+      if (next) this.db.prepare("UPDATE task_steps SET state = 'active' WHERE id = ?").run(next.id as string);
+    });
   }
 
   getTask(id: string): Task | null {
@@ -360,14 +452,54 @@ export class Store {
     return row ? toTask(row) : null;
   }
 
+  getWorkspace(taskId: string): TaskWorkspace | null {
+    const r = this.db.prepare("SELECT * FROM task_workspaces WHERE task_id = ?").get(taskId) as Row | undefined;
+    return r
+      ? {
+          taskId: String(r.task_id),
+          repoPath: String(r.repo_path),
+          path: String(r.path),
+          branch: String(r.branch),
+          baseCommit: String(r.base_commit),
+          checkpointCommit: str(r.checkpoint_commit),
+          checkpointAt: str(r.checkpoint_at),
+          publishedCommit: str(r.published_commit),
+          githubRepo: str(r.github_repo),
+          pullRequestUrl: str(r.pull_request_url),
+          publishError: str(r.publish_error),
+          mergeCommit: str(r.merge_commit),
+          approvedCommit: str(r.approved_commit),
+          error: str(r.error),
+        }
+      : null;
+  }
+
+  saveWorkspace(w: TaskWorkspace): void {
+    this.db
+      .prepare(
+        `INSERT INTO task_workspaces (task_id, repo_path, path, branch, base_commit, checkpoint_commit, checkpoint_at, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET
+      checkpoint_commit = excluded.checkpoint_commit, checkpoint_at = excluded.checkpoint_at, error = excluded.error`,
+      )
+      .run(w.taskId, w.repoPath, w.path, w.branch, w.baseCommit, w.checkpointCommit, w.checkpointAt, w.error);
+    this.db
+      .prepare(
+        "UPDATE task_workspaces SET published_commit = ?, pull_request_url = ?, publish_error = ?, merge_commit = ?, github_repo = ?, approved_commit = ? WHERE task_id = ?",
+      )
+      .run(w.publishedCommit, w.pullRequestUrl, w.publishError, w.mergeCommit, w.githubRepo, w.approvedCommit, w.taskId);
+  }
+
   createTask(input: NewTask): Task {
     const id = randomUUID();
     const at = now();
+    // Only role tasks get a stage (docs/TASK_STATES.md); plain chats keep it null.
+    const stage = input.roleId ? "backlog" : null;
+    const settings = this.getSettings();
     this.db
       .prepare(
         `INSERT INTO tasks (id, project_id, kind, title, status, session_id, session_started, can_edit, provider, model, effort, role_id, agent_id, priority,
-           emergency, parent_task_id, depth, created_by_role_id, question, created_at, updated_at)
-         VALUES (?, ?, 'chat', ?, 'idle', NULL, 0, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+           emergency, parent_task_id, depth, created_by_role_id, question, stage, stage_changed_at, created_at, updated_at, token_budget, tool_budget)
+         VALUES (?, ?, 'chat', ?, 'idle', NULL, 0, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -383,8 +515,12 @@ export class Store {
         input.parentTaskId ?? null,
         input.depth ?? 0,
         input.createdByRoleId ?? null,
+        stage,
+        stage ? at : null,
         at,
         at,
+        settings.defaultTokenBudget,
+        settings.defaultToolBudget,
       );
     return this.getTask(id)!;
   }
@@ -393,10 +529,15 @@ export class Store {
     const current = this.getTask(id);
     if (!current) return null;
     const next = merge(current, patch);
+    // stage_changed_at tracks the stage itself, not every field update, so the UI can show how
+    // long a task has sat in its current stage.
+    const stageChangedAt = patch.stage !== undefined && patch.stage !== current.stage ? now() : next.stageChangedAt;
     this.db
       .prepare(
         `UPDATE tasks SET title = ?, status = ?, session_id = ?, session_started = ?, session_provider = ?, can_edit = ?, provider = ?, model = ?, effort = ?,
-           agent_id = ?, priority = ?, emergency = ?, question = ?, handoff = ?, handoff_run_id = ?, auto_compact = ?, token_budget = ?, tool_budget = ?, updated_at = ? WHERE id = ?`,
+           agent_id = ?, priority = ?, emergency = ?, question = ?, handoff = ?, handoff_run_id = ?, auto_compact = ?, token_budget = ?, tool_budget = ?,
+           stage = ?, reviewer_role_id = ?, step_state = ?, step_summary = ?, next_step = ?, stage_changed_at = ?, base_commit = ?, auto_continues = ?,
+           updated_at = ? WHERE id = ?`,
       )
       .run(
         next.title,
@@ -417,9 +558,23 @@ export class Store {
         next.autoCompact ? 1 : 0,
         next.tokenBudget,
         next.toolBudget,
+        next.stage,
+        next.reviewerRoleId,
+        next.stepState,
+        next.stepSummary,
+        next.nextStep,
+        stageChangedAt,
+        next.baseCommit,
+        next.autoContinues,
         now(),
         id,
       );
+    return this.getTask(id);
+  }
+
+  // Failure recovery must not depend on every optional task column being writable.
+  setTaskStatus(id: string, status: Task["status"]): Task | null {
+    this.db.prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?").run(status, now(), id);
     return this.getTask(id);
   }
 
@@ -427,16 +582,67 @@ export class Store {
     return this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id).changes > 0;
   }
 
-  // Emergencies that are not done yet. Failed or stopped ones still hold the project.
+  // Emergencies whose agent has not finished a step yet. Failed or stopped ones still hold the
+  // project; one waiting for the owner's review no longer does.
   openEmergencies(projectId?: string): Task[] {
+    const open = `emergency = 1 AND status <> 'done' AND COALESCE(stage, '') NOT IN ('needs_review', 'in_review', 'approved', 'closed')`;
     const rows = projectId
-      ? this.db.prepare("SELECT * FROM tasks WHERE emergency = 1 AND status <> 'done' AND project_id = ? ORDER BY created_at").all(projectId)
-      : this.db.prepare("SELECT * FROM tasks WHERE emergency = 1 AND status <> 'done' ORDER BY created_at").all();
+      ? this.db.prepare(`SELECT * FROM tasks WHERE ${open} AND project_id = ? ORDER BY created_at`).all(projectId)
+      : this.db.prepare(`SELECT * FROM tasks WHERE ${open} ORDER BY created_at`).all();
     return (rows as Row[]).map(toTask);
+  }
+
+  // Delegated work under a task that the owner has not approved or closed yet.
+  openChildTasks(taskId: string): Task[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE parent_task_id = ? AND CASE WHEN stage IS NULL THEN status <> 'done' ELSE stage NOT IN ('approved', 'closed') END
+         ORDER BY created_at`,
+      )
+      .all(taskId) as Row[];
+    return rows.map(toTask);
+  }
+
+  addTaskReview(input: Omit<TaskReview, "id" | "createdAt">): TaskReview {
+    const review: TaskReview = { ...input, id: randomUUID(), createdAt: now() };
+    this.db
+      .prepare("INSERT INTO task_reviews (id, task_id, run_id, reviewer, verdict, findings, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(review.id, review.taskId, review.runId, review.reviewer, review.verdict, JSON.stringify(review.findings), review.createdAt);
+    return review;
+  }
+
+  listTaskReviews(taskId: string): TaskReview[] {
+    const rows = this.db.prepare("SELECT * FROM task_reviews WHERE task_id = ? ORDER BY created_at, rowid").all(taskId) as Row[];
+    return rows.map((r) => ({
+      id: r.id as string,
+      taskId: r.task_id as string,
+      runId: str(r.run_id),
+      reviewer: r.reviewer as string,
+      verdict: r.verdict as TaskReview["verdict"],
+      findings: parseJson<string[]>(r.findings, []),
+      createdAt: r.created_at as string,
+    }));
   }
 
   waitingTasks(): Task[] {
     return (this.db.prepare("SELECT * FROM tasks WHERE status = 'waiting' ORDER BY updated_at").all() as Row[]).map(toTask);
+  }
+
+  // Role tasks waiting to start, in the order the board's "Up next" shows them.
+  backlogTasks(projectId: string): Task[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE project_id = ? AND stage = 'backlog' AND role_id IS NOT NULL AND status NOT IN ('running', 'queued')
+         ORDER BY emergency DESC, priority DESC, created_at`,
+      )
+      .all(projectId);
+    return (rows as Row[]).map(toTask);
+  }
+
+  // Oldest first: the work that has waited longest for the owner comes up first.
+  tasksInStage(stage: TaskStage): Task[] {
+    const rows = this.db.prepare("SELECT * FROM tasks WHERE stage = ? AND status NOT IN ('running', 'queued') ORDER BY stage_changed_at").all(stage);
+    return (rows as Row[]).map(toTask);
   }
 
   // ---- messages
@@ -476,7 +682,7 @@ export class Store {
     return (this.db.prepare("SELECT * FROM runs WHERE tool_calls < 0").all() as Row[]).map(toRun);
   }
 
-  setRunPurpose(id: string, purpose: "work" | "handoff"): void {
+  setRunPurpose(id: string, purpose: Run["purpose"]): void {
     this.db.prepare("UPDATE runs SET purpose = ? WHERE id = ?").run(purpose, id);
   }
 
@@ -589,6 +795,8 @@ export class Store {
       const runs = this.db
         .prepare("UPDATE runs SET status = 'interrupted', error = 'The server stopped while this run was active.', ended_at = ? WHERE status = 'running'")
         .run(now()).changes;
+      // A review cut short gives no verdict: the work goes back to the owner (stages.ts review_cancel).
+      this.db.prepare("UPDATE tasks SET stage = 'needs_review', stage_changed_at = ? WHERE status = 'running' AND stage = 'in_review'").run(now());
       const tasks = this.db.prepare("UPDATE tasks SET status = 'interrupted' WHERE status = 'running'").run().changes;
       return { runs: Number(runs), tasks: Number(tasks) };
     });
@@ -708,15 +916,15 @@ export class Store {
     return row ? toRole(row) : null;
   }
 
-  createRole(input: Omit<Role, "id" | "sort" | "createdAt" | "updatedAt">): Role {
+  createRole(input: Omit<Role, "id" | "sort" | "createdAt" | "updatedAt" | "reviewerRoleId"> & { reviewerRoleId?: string | null }): Role {
     const id = randomUUID();
     const at = now();
     const sort = this.db.prepare("SELECT COALESCE(MAX(sort), -1) + 1 AS n FROM roles WHERE department_id = ?").get(input.departmentId) as Row;
     this.db
       .prepare(
-        `INSERT INTO roles (id, project_id, department_id, name, brief, provider, model, effort, can_edit, allowed_tools, context_docs, sort, created_at,
-           updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO roles (id, project_id, department_id, name, brief, provider, model, effort, can_edit, allowed_tools, context_docs, reviewer_role_id,
+           sort, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -730,6 +938,7 @@ export class Store {
         input.canEdit ? 1 : 0,
         input.allowedTools === null ? null : JSON.stringify(input.allowedTools),
         JSON.stringify(input.contextDocs),
+        input.reviewerRoleId ?? null,
         Number(sort.n),
         at,
         at,
@@ -739,7 +948,9 @@ export class Store {
 
   updateRole(
     id: string,
-    patch: Partial<Pick<Role, "departmentId" | "name" | "brief" | "provider" | "model" | "effort" | "canEdit" | "allowedTools" | "contextDocs">>,
+    patch: Partial<
+      Pick<Role, "departmentId" | "name" | "brief" | "provider" | "model" | "effort" | "canEdit" | "allowedTools" | "contextDocs" | "reviewerRoleId">
+    >,
   ): Role | null {
     const current = this.getRole(id);
     if (!current) return null;
@@ -747,7 +958,7 @@ export class Store {
     this.db
       .prepare(
         `UPDATE roles SET department_id = ?, name = ?, brief = ?, provider = ?, model = ?, effort = ?, can_edit = ?, allowed_tools = ?, context_docs = ?,
-           updated_at = ? WHERE id = ?`,
+           reviewer_role_id = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.departmentId,
@@ -759,6 +970,7 @@ export class Store {
         next.canEdit ? 1 : 0,
         next.allowedTools === null ? null : JSON.stringify(next.allowedTools),
         JSON.stringify(next.contextDocs),
+        next.reviewerRoleId,
         now(),
         id,
       );
