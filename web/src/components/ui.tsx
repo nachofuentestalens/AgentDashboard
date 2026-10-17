@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
-import type { RunStatus, TaskStage, TaskStatus } from "@ad/shared";
+import type { RunStatus, TaskGitState, TaskStage, TaskStatus } from "@ad/shared";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 
@@ -57,6 +57,25 @@ export function StageBadge({ stage }: { stage: TaskStage | null }) {
   if (!stage) return null;
   const s = stageStyle[stage];
   return <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase ${s.className}`}>{s.label}</span>;
+}
+
+const gitStyle: Record<TaskGitState, { label: string; className: string; title: string }> = {
+  local: { label: "Not on GitHub", className: "bg-amber-500/15 text-amber-300", title: "The task's changes are committed locally but not published yet" },
+  pr_open: { label: "PR open", className: "bg-sky-500/15 text-sky-300", title: "A pull request is waiting to be merged" },
+  merged: { label: "Merged", className: "bg-violet-500/15 text-violet-300", title: "The pull request was merged" },
+  publish_failed: { label: "Publish failed", className: "bg-red-500/15 text-red-300", title: "Publishing to GitHub failed; open the task for details" },
+  error: { label: "Worktree error", className: "bg-red-500/15 text-red-300", title: "The task's worktree needs attention; open the task for details" },
+};
+
+// Where a task's file changes are: local, in a pull request, or merged.
+export function GitBadge({ state }: { state: TaskGitState | null }) {
+  if (!state) return null;
+  const s = gitStyle[state];
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase ${s.className}`} title={s.title}>
+      {s.label}
+    </span>
+  );
 }
 
 // A task's priority (0-10), and the emergency flag that outranks it.

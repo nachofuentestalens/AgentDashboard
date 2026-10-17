@@ -56,7 +56,11 @@ export function TaskPage() {
   });
   const github = useMutation({
     mutationFn: (action: "publish" | "merge") => (action === "publish" ? api.publishTask(taskId) : api.mergeTask(taskId)),
-    onSettled: () => void qc.invalidateQueries({ queryKey: keys.task(taskId) }),
+    // Task lists show where each task's changes are.
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: keys.task(taskId) });
+      void qc.invalidateQueries({ queryKey: ["tasks"] });
+    },
   });
 
   // Follow the stream while the reader is at the bottom; leave them alone if they scrolled up.
