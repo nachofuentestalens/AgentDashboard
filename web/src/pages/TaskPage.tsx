@@ -385,7 +385,7 @@ export function TaskPage() {
                 checked={task.canEdit}
                 onChange={(canEdit) => update.mutate({ canEdit })}
                 label="Can edit files"
-                hint="Off: the agent can only read and investigate."
+                hint={task.roleId ? "Off: the agent can only read and investigate." : "On: full file, command and network access. Off: read-only."}
               />
               {project.data && (
                 <ModelPicker

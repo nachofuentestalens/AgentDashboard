@@ -34,6 +34,16 @@ describe("buildArgs", () => {
     expect(args).not.toContain("Bash(git:*)");
   });
 
+  it("grants full access only when the run is editable", () => {
+    const writing = buildArgs({ ...base, resume: false, canEdit: true, fullAccess: true });
+    expect(writing.join(" ")).toContain("--permission-mode bypassPermissions");
+    expect(writing).not.toContain("--allowedTools");
+    expect(writing).not.toContain("--disallowedTools");
+    const reading = buildArgs({ ...base, resume: true, canEdit: false, fullAccess: true });
+    expect(reading).not.toContain("bypassPermissions");
+    expect(reading).toContain("--disallowedTools");
+  });
+
   it("ends with the appended system prompt; the user prompt goes through stdin", () => {
     expect(buildArgs({ ...base, resume: false, canEdit: true }).at(-1)).toBe("ctx");
   });

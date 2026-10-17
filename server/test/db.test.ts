@@ -24,7 +24,7 @@ describe("existing version 5 databases", () => {
         db.exec("PRAGMA user_version = 5");
         migrate(db);
         migrate(db);
-        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 10 });
+        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 11 });
       } finally {
         db.close();
       }
@@ -41,5 +41,34 @@ describe("existing version 5 databases", () => {
         await app.close();
       }
     });
+  }
+});
+
+it("clears existing allowances once without resetting later owner limits or usage", async () => {
+  const dataDir = tempDir("ad-unlimited-");
+  const app = await testApp(dataDir);
+  const task = await newTask(app, await newProject(app), { message: "Prior work [tool]" });
+  await runFinished(app, app.store.listRuns(task.id)[0]!.id);
+  const usage = app.runner.usageSummary(task.id);
+  app.store.updateTask(task.id, { tokenBudget: 1_000_000, toolBudget: 80 });
+  app.store.updateSettings({ defaultTokenBudget: 1_000_000, defaultToolBudget: 80 });
+  await app.close();
+  const db = openDb(path.join(dataDir, "dashboard.db"));
+  try {
+    db.exec("PRAGMA user_version = 10");
+    migrate(db);
+    expect(db.prepare("SELECT token_budget, tool_budget FROM tasks WHERE id = ?").get(task.id)).toEqual({ token_budget: null, tool_budget: null });
+    expect(db.prepare("SELECT value FROM settings WHERE key IN ('defaultTokenBudget', 'defaultToolBudget')").all()).toEqual([{ value: "" }, { value: "" }]);
+    db.prepare("UPDATE tasks SET tool_budget = 200 WHERE id = ?").run(task.id);
+    migrate(db);
+    expect(db.prepare("SELECT tool_budget FROM tasks WHERE id = ?").get(task.id)).toEqual({ tool_budget: 200 });
+  } finally {
+    db.close();
+  }
+  const reopened = await testApp(dataDir);
+  try {
+    expect(reopened.runner.usageSummary(task.id)).toEqual(usage);
+  } finally {
+    await reopened.close();
   }
 });

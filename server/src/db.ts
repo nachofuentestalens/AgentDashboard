@@ -277,6 +277,10 @@ const MIGRATIONS: (string | ((db: Db) => void))[] = [
       if (!columns.has(definition!.split(" ")[0]!)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
     }
   },
+  // 11: Remove legacy task checkpoints for unattended work. Owners can still opt into limits later.
+  `UPDATE tasks SET token_budget = NULL, tool_budget = NULL;
+   INSERT INTO settings (key, value) VALUES ('defaultTokenBudget', ''), ('defaultToolBudget', '')
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value;`,
 ];
 
 export type Db = DatabaseSync;
