@@ -140,7 +140,7 @@ function TasksTab({ project }: { project: Project }) {
                   />
                 </>
               ) : (
-                <Toggle checked={canEdit} onChange={setCanEdit} label="Can edit files" hint="Off: the agent can only read and investigate." />
+                <Toggle checked={canEdit} onChange={setCanEdit} label="Can edit files" hint="On: full file, command and network access. Off: read-only." />
               )}
               <ModelPicker
                 provider={choice.provider}

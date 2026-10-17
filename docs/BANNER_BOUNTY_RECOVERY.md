@@ -40,10 +40,10 @@ Read-only checks against the running dashboard at `http://127.0.0.1:5190` found 
 
 Auto-review, start-next and hands-off approval are already enabled. Automatic continuation of reviewed intermediate steps is set to zero. These settings do not bypass task usage checkpoints or restart previously stopped work.
 
-| Task | Current blocker | Recovery action |
-| --- | --- | --- |
-| M1-06 | Stopped at 80 cumulative tool calls, including its previous attempt. WIP checkpoint `5b380305`. | Raise or clear task allowances, then retry latest stopped run `33945f93-8bc9-4afb-ba15-89804299fab9`. |
-| M1-07 | Stopped at 80 tool calls. WIP checkpoint `068cd9c6`. | Raise or clear task allowances, then retry latest stopped run `04ad9cf7-26f0-4cc6-8f8d-7a9bbaca0c74`. |
+| Task  | Current blocker                                                                                                                                              | Recovery action                                                                                                           |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| M1-06 | Stopped at 80 cumulative tool calls, including its previous attempt. WIP checkpoint `5b380305`.                                                              | Raise or clear task allowances, then retry latest stopped run `33945f93-8bc9-4afb-ba15-89804299fab9`.                     |
+| M1-07 | Stopped at 80 tool calls. WIP checkpoint `068cd9c6`.                                                                                                         | Raise or clear task allowances, then retry latest stopped run `04ad9cf7-26f0-4cc6-8f8d-7a9bbaca0c74`.                     |
 | M1-09 | Corrections completed, but automatic review failed at 2,285,913 tokens against a 2M cap. Both allowances are now null; clearing them did not restart review. | Request a new review through the task actions endpoint. Do not retry its successful author run or approve without review. |
 
 Unfinished backlog tasks still have the default 1M-token/80-tool allowances, so they can stop in the same way. For owner-authorized unattended milestone delivery, clear both allowances on unfinished milestone role tasks only (`PATCH /api/tasks/:id`, body `{"tokenBudget":null,"toolBudget":null}`). Do not change plain chats, accepted tasks, or global defaults. Re-read live task/run state before applying recovery; these IDs describe this audit, not an unconditional replay script.
@@ -53,3 +53,13 @@ Retry uses `POST /api/runs/:id/retry` with `{}`. Review uses `POST /api/tasks/55
 The coordinator is currently in **advise** mode, not automatic mode. Claude session use was 89%, above its configured 20% reserve, with reset at approximately **2026-10-18 01:40 Asia/Dubai**. This is an advisory recommendation, not proof that the scheduler is holding work. Automatic provider pause/resume would require a dashboard-wide coordinator mode change, affecting other projects as well; preserve the reserve percentages and make that wider scope explicit.
 
 No live settings, tasks, branches or game files were modified in this follow-up audit. The task's worktree-only constraint requires separate authorization before live recovery. Verify queued/running status and any wait reasons after recovery; merely enabling automation flags does not establish that work has resumed.
+
+## Authorized recovery: 2026-10-17, approximately 19:13 UTC
+
+The owner authorized live recovery and requested full-access dashboard chats with no task allowances. Through the live API, cleared token/tool allowances on 27 capped idle tasks across both projects and set both defaults to unlimited. Only the active AgentDashboard recovery chat could not be updated: the current API rejects usage-control edits during a run. Migration 11 in this worktree clears remaining legacy allowances when deployed; it does not reset usage history.
+
+Banner & Bounty now has auto-review, hands-off approval/integration, start-next, and up to 20 reviewed step continuations enabled. M1-06 and M1-07 were retried; M1-09 was queued for a new review. All three were verified queued with no task allowances and a coordinator wait reason for Claude's session reserve. They are not currently executing. Existing checkpoints and task dependencies were preserved.
+
+The coordinator was changed from advise to auto, keeping its 20% session reserve, 15% weekly reserve and existing provider choices. Pause/resume is enabled. This is dashboard-wide. Claude's recorded reset is around 01:40 Dubai time on October 18; queued work becomes eligible when refreshed usage permits it, subject to capacity and dependencies. No manual restart is needed for this usage hold. Review failures after three repair rounds, merge conflicts, explicit questions or unrelated process failures can still need intervention.
+
+Editable owner chats will launch with full provider permissions after this worktree's code is deployed. Studio department boundaries and read-only reviews remain enforced. This task did not deploy code, change the live checkout, or move any branches.

@@ -20,7 +20,7 @@ export interface CodexArgs {
   // Set: continue that thread with `exec resume`. Codex picks a new thread's id itself and reports
   // it in its first event.
   resumeId: string | null;
-  sandbox: "read-only" | "workspace-write";
+  sandbox: "read-only" | "workspace-write" | "danger-full-access";
   // Folders writable besides the working directory, for a department owning several.
   writableRoots: string[];
 }

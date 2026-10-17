@@ -128,6 +128,8 @@ export interface RunArgs {
   sessionId: string;
   resume: boolean;
   canEdit: boolean;
+  // Owner chats can use the machine's tools without an interactive approval prompt.
+  fullAccess?: boolean;
   allowedTools: string[];
   systemPrompt: string;
   // A role's preamble: long and written by people, so it goes in a file rather than an argument.
@@ -140,7 +142,9 @@ export interface RunArgs {
 export function buildArgs(a: RunArgs): string[] {
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", a.model, "--effort", a.effort];
   args.push(a.resume ? "--resume" : "--session-id", a.sessionId);
-  if (a.canEdit) {
+  if (a.canEdit && a.fullAccess) {
+    args.push("--permission-mode", "bypassPermissions");
+  } else if (a.canEdit) {
     // Headless runs cannot ask for permission: anything not allowed here is refused. A department
     // confined to its folders gets no blanket acceptEdits, only edit rules for those folders.
     if (a.editRules?.mode === "default") args.push("--permission-mode", "default", "--allowedTools", ...a.editRules.allow, ...a.allowedTools);
@@ -157,13 +161,15 @@ export function buildArgs(a: RunArgs): string[] {
   return args;
 }
 
-export function systemPrompt(projectName: string, canEdit: boolean): string {
+export function systemPrompt(projectName: string, canEdit: boolean, fullAccess = false): string {
   return [
     `You are working on the game project "${projectName}" through AgentDashboard, a local dashboard the developer uses to direct agents.`,
     "Read only relevant files, bound command output, avoid repeating successful checks, and keep replies concise.",
     "The developer reads your replies in the dashboard, rendered as Markdown. Nobody can approve permission prompts while you run:",
     canEdit
-      ? "file edits are allowed, and only the pre-approved commands will run. If you need a command that is refused, say which one and why."
+      ? fullAccess
+        ? "this editable owner chat has full filesystem, command and network access. Carry out the owner's authorized work without permission prompts; respect their task scope and repository/worktree instructions."
+        : "file edits are allowed, and only the pre-approved commands will run. If you need a command that is refused, say which one and why."
       : "this conversation is read-only. Investigate and explain, but do not try to change files.",
   ].join(" ");
 }

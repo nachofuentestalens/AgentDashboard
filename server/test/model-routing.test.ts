@@ -19,7 +19,7 @@ it.each(["claude", "codex"] as const)("%s reviews first and switches with a fres
   expect(runs[1]!.effort).toBe("low");
   expect(runs[1]!.sessionId).not.toBe(runs[0]!.sessionId);
   expect(runs[1]!.messageId).toBe(runs[0]!.messageId);
-  expect(app.store.getTask(task.id)!.tokenBudget).toBe(1_000_000);
+  expect(app.store.getTask(task.id)!.tokenBudget).toBeNull();
   expect(app.runner.usageSummary(task.id).runs).toBe(2);
   const firstText = app.runner.readEvents(runs[0]!.id).find((e) => e.event.kind === "text");
   expect(firstText?.event).toMatchObject({ kind: "text", text: expect.stringContaining("model-review") });

@@ -1280,7 +1280,7 @@ export class Runner {
       if (workspace) {
         record({ kind: "notice", level: "info", text: `Isolated worktree: ${workspace.path} (${workspace.branch}). The project checkout is unchanged.` });
         prompt +=
-          "\n\nWork only in this task's isolated worktree. Keep its assigned branch. The dashboard saves local WIP commits after runs; do not switch branches, merge into the live checkout, or remove the worktree. Dependencies may need installing in this separate folder.";
+          "\n\nMake repository changes only in this task's isolated worktree. Keep its assigned branch. The dashboard saves local WIP commits after runs; do not switch branches, merge into the live checkout, or remove the worktree. Dependencies may need installing in this separate folder. External tools and services may be used when required by the owner's request.";
       }
       let launcher: Launcher;
       let args: string[];
@@ -1297,6 +1297,7 @@ export class Runner {
           promptFile = ctx.file;
           input = `${ctx.preface}\n${prompt}`;
         }
+        const fullAccess = canEdit && !task.roleId && run.purpose === "work";
         if (provider === "claude") {
           args = buildArgs({
             model: model!,
@@ -1304,8 +1305,9 @@ export class Runner {
             sessionId: sessionId!,
             resume,
             canEdit,
+            fullAccess,
             allowedTools: ctx?.allowedTools ?? project.allowedTools,
-            systemPrompt: systemPrompt(project.name, canEdit),
+            systemPrompt: systemPrompt(project.name, canEdit, fullAccess),
             systemPromptFile: ctx?.file ?? undefined,
             editRules: ctx?.rules ?? null,
           });
@@ -1327,12 +1329,13 @@ export class Runner {
               .join("/");
             where = `\n\nYour working directory is \`${first}/\` inside the repository; the repository root is \`${up}\`. Only your department's folders are writable.`;
           }
-          if (!resume) input = `<instructions>\n${ctx ? ctx.systemText : systemPrompt(project.name, canEdit)}${where}\n</instructions>\n\n${input}`;
+          if (!resume || fullAccess)
+            input = `<instructions>\n${ctx ? ctx.systemText : systemPrompt(project.name, canEdit, fullAccess)}${where}\n</instructions>\n\n${input}`;
           args = buildCodexArgs({
             model,
             effort,
             resumeId: resume ? sessionId : null,
-            sandbox: canEdit ? "workspace-write" : "read-only",
+            sandbox: fullAccess ? "danger-full-access" : canEdit ? "workspace-write" : "read-only",
             writableRoots: roots,
           });
         }

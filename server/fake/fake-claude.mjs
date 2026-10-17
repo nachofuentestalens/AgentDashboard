@@ -41,7 +41,7 @@ const context = prompt.match(/^<studio-context>[\s\S]*?<\/studio-context>\s*/);
 if (context) prompt = prompt.slice(context[0].length).trim();
 const history = prompt.match(/^<conversation-so-far>[\s\S]*?<\/conversation-so-far>\s*/);
 if (history) prompt = prompt.slice(history[0].length).trim();
-prompt = prompt.replace(/\n\nWork only in this task's isolated worktree\.[\s\S]*$/, "");
+prompt = prompt.replace(/\n\n(?:Work only|Make repository changes only) in this task's isolated worktree\.[\s\S]*$/, "");
 const systemFile = flag("--append-system-prompt-file");
 const systemText = systemFile ? fs.readFileSync(systemFile, "utf8") : "";
 const who = systemText.match(/^You are (.+?), the (.+?) in the (.+?) department/);
@@ -113,7 +113,13 @@ const list = (name) => {
 const editFolders = list("--allowedTools")
   .filter((a) => a.startsWith("Edit(./"))
   .map((a) => a.slice("Edit(./".length, -"/**)".length));
-const mode = args.includes("acceptEdits") ? "can edit" : editFolders.length ? `can edit ${editFolders.join(", ")}` : "read-only";
+const mode = args.includes("bypassPermissions")
+  ? "full access"
+  : args.includes("acceptEdits")
+    ? "can edit"
+    : editFolders.length
+      ? `can edit ${editFolders.join(", ")}`
+      : "read-only";
 const persona = who ? ` as ${who[1]} (${who[3]})` : "";
 await say(
   `${resumed ? "Continuing session" : "Starting session"} ${sessionId.slice(0, 8)} on ${model} (${mode})${persona}${context ? " with studio context" : ""}. You said: "${prompt.slice(0, 200)}"`,

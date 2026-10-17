@@ -43,3 +43,20 @@ it("builds Codex new/resume commands with stdin and enforced sandbox", () => {
   expect(resumed).toContain('approval_policy="never"');
   expect(resumed.at(-1)).toBe("-");
 });
+
+it.each(["claude", "codex"] as const)("%s owner chats use full access on first and resumed turns, but handoffs stay read-only", async (provider) => {
+  app = await testApp();
+  const task = await newTask(app, await newProject(app), { provider, canEdit: true, message: "Inspect [args]" });
+  await runFinished(app, latestRun(app, task.id).id);
+  const permission = provider === "claude" ? "bypassPermissions" : 'sandbox_mode=\\"danger-full-access\\"';
+  expect(reply(app, task.id)).toContain(permission);
+  const session = app.store.getTask(task.id)!.sessionId;
+  const resumed = await api<{ run: { id: string } }>(app, "POST", `/api/tasks/${task.id}/messages`, { text: "Continue [args]" });
+  await runFinished(app, resumed.body.run.id);
+  expect(reply(app, task.id)).toContain(permission);
+  expect(app.store.getTask(task.id)!.sessionId).toBe(session);
+  const handoff = await api<{ run: { id: string } }>(app, "POST", `/api/tasks/${task.id}/prepare-handoff`);
+  await runFinished(app, handoff.body.run.id);
+  const events = app.runner.readEvents(handoff.body.run.id);
+  expect(events.some(({ event }) => event.kind === "text" && event.text.includes("read-only"))).toBe(true);
+});
