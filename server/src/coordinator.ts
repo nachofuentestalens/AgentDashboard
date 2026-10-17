@@ -31,6 +31,8 @@ export interface RunCoordinator {
   // Called before each scheduling pass: applies automatic decisions and returns the provider holds.
   beforeSchedule(): Map<Provider, ProviderHold>;
   observe(reading: Omit<QuotaReading, "at">): void;
+  // Re-reads the providers' usage APIs; without force, skipped right after a read.
+  refreshUsage(force?: boolean): Promise<void>;
 }
 
 // The next local weekly reset of a plan, strictly after now.

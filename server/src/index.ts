@@ -16,7 +16,14 @@ const port = Number(process.env.AGENT_DASHBOARD_PORT ?? 5190);
 const dataDir = resolveDataDir();
 const webDir = fileURLToPath(new URL("../../web/dist", import.meta.url));
 
-const app = await buildApp({ dataDir, webDir: process.env.AGENT_DASHBOARD_DEV ? undefined : webDir, logger: true });
+const { providerUsageFetcher } = await import("./usage.ts");
+const app = await buildApp({
+  dataDir,
+  webDir: process.env.AGENT_DASHBOARD_DEV ? undefined : webDir,
+  logger: true,
+  // Demo mode and e2e run the fake agent and must not read the owner's real usage.
+  usage: process.env.AGENT_DASHBOARD_FAKE_CLAUDE ? undefined : providerUsageFetcher(),
+});
 
 // Loopback only, on purpose: the API starts processes and has no authentication.
 await app.fastify.listen({ host: HOST, port });

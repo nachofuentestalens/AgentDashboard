@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Run, Task } from "@ad/shared";
-import { buildApp, type App } from "../src/app.ts";
+import { buildApp, type App, type AppOptions } from "../src/app.ts";
 import { FAKE_CLAUDE } from "../src/claude.ts";
 import { FAKE_CODEX } from "../src/codex.ts";
 
@@ -15,9 +15,10 @@ export function gitRepo(): string {
   return fs.realpathSync(dir);
 }
 
-export async function testApp(dataDir = tempDir("ad-data-")): Promise<App & { dataDir: string }> {
+export async function testApp(dataDir = tempDir("ad-data-"), extra: Partial<AppOptions> = {}): Promise<App & { dataDir: string }> {
   process.env.FAKE_CLAUDE_DELAY = "2";
   const app = await buildApp({
+    ...extra,
     dataDir,
     launchers: {
       claude: { command: process.execPath, prefix: [FAKE_CLAUDE], display: "fake" },

@@ -13,6 +13,7 @@ import {
   type ProviderState,
 } from "../src/coordinator.ts";
 import { plan, type QueuedRun, type SchedulerState } from "../src/scheduler.ts";
+import { parseClaudeUsage } from "../src/usage.ts";
 import { api, newProject, newTask, runFinished, testApp } from "./helpers.ts";
 
 const HOUR = 3_600_000;
@@ -283,5 +284,60 @@ describe("coordinator API", () => {
     expect(saved.body.config).toMatchObject({ mode: "auto", sessionReservePct: 5 });
     expect((await api(app, "PUT", "/api/coordinator/config", { ...view.config, mode: "always" })).status).toBe(400);
     expect((await api(app, "POST", "/api/coordinator/apply", { key: "pause:nothing" })).status).toBe(409);
+  });
+
+  it("reads both windows from the usage API, and a reset-only CLI report keeps the percentage", async () => {
+    const session = new Date(Date.now() + 3_600_000 - 57).toISOString();
+    const weekly = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    const app = await testApp(undefined, {
+      usage: async (provider) =>
+        provider === "claude"
+          ? [
+              { window: "session", usedPercent: 37, resetsAt: session },
+              { window: "weekly", usedPercent: 64, resetsAt: weekly },
+            ]
+          : null,
+    });
+    apps.push(app);
+    let view = (await api<CoordinatorView>(app, "POST", "/api/coordinator/refresh")).body;
+    let claude = view.providers.find((p) => p.provider === "claude")!;
+    expect(claude.session).toMatchObject({ usedPercent: 37, source: "api", resetsAt: session });
+    expect(claude.weekly).toMatchObject({ usedPercent: 64, source: "api", resetsAt: weekly });
+    expect(claude.usageCheck).toMatchObject({ error: null });
+    expect(view.providers.find((p) => p.provider === "codex")!.usageCheck).toBeNull();
+
+    const projectId = await newProject(app);
+    const task = await newTask(app, projectId, { message: "[ratelimit:reset] hello" });
+    await runFinished(app, app.store.listRuns(task.id).at(-1)!.id);
+    view = (await api<CoordinatorView>(app, "GET", "/api/coordinator")).body;
+    claude = view.providers.find((p) => p.provider === "claude")!;
+    expect(claude.session).toMatchObject({ usedPercent: 37, source: "api", resetsAt: session });
+  });
+
+  it("shows why the usage API could not be read", async () => {
+    const app = await testApp(undefined, {
+      usage: async () => {
+        throw new Error("No Claude sign-in found.");
+      },
+    });
+    apps.push(app);
+    const view = (await api<CoordinatorView>(app, "POST", "/api/coordinator/refresh")).body;
+    expect(view.providers.find((p) => p.provider === "claude")!.usageCheck).toMatchObject({ error: "No Claude sign-in found." });
+  });
+});
+
+describe("usage API", () => {
+  it("reads utilization as a percentage and normalises reset times", () => {
+    expect(
+      parseClaudeUsage({
+        five_hour: { utilization: 0.5, resets_at: "2026-10-17T10:59:59.943648+00:00" },
+        seven_day: { utilization: 35, resets_at: null },
+        seven_day_opus: { utilization: 1, resets_at: null },
+      }),
+    ).toEqual([
+      { window: "session", usedPercent: 0.5, resetsAt: "2026-10-17T10:59:59.943Z" },
+      { window: "weekly", usedPercent: 35, resetsAt: null },
+    ]);
+    expect(parseClaudeUsage({ error: "nope" })).toEqual([]);
   });
 });

@@ -30,6 +30,7 @@ import { HttpError, parse } from "./http.ts";
 import type { Runner } from "./runner.ts";
 import type { ProviderHold } from "./scheduler.ts";
 import type { Store } from "./store.ts";
+import type { UsageFetcher } from "./usage.ts";
 
 const CONFIG_KEY = "coordinator.config";
 const READINGS_KEY = "coordinator.readings";
@@ -39,8 +40,15 @@ const LOG_SIZE = 50;
 // that fails does not repeat on every scheduling pass.
 const COOLDOWN_MS = 5 * 60_000;
 
+// The provider's usage API is read this often, and on demand at most once per RECHECK_MS.
+const USAGE_POLL_MS = 5 * 60_000;
+const RECHECK_MS = 30_000;
+const RESET_TOLERANCE_MS = 10 * 60_000;
+
 type Readings = Partial<Record<`${Provider}:${QuotaWindow}`, QuotaReading>>;
 type Paused = Record<string, { runId: string }>;
+
+const sameReset = (a: string | null, b: string | null) => a !== null && b !== null && Math.abs(Date.parse(a) - Date.parse(b)) < RESET_TOLERANCE_MS;
 
 // The project coordinator: watches each provider's session and weekly usage, holds queued work
 // that would eat into the owner's reserve, and pauses, resumes, starts or moves tasks. In advise
@@ -48,14 +56,56 @@ type Paused = Record<string, { runId: string }>;
 export class Coordinator implements RunCoordinator {
   private readonly log: CoordinatorLogEntry[] = [];
   private readonly cooldown = new Map<string, number>();
+  private readonly usageChecks = new Map<Provider, { at: string; error: string | null }>();
+  private usageTimer: NodeJS.Timeout | null = null;
+  private usagePending: Promise<void> | null = null;
 
   constructor(
     private readonly store: Store,
     private readonly bus: Bus,
     private readonly runner: Runner,
     private readonly clock: () => number = Date.now,
+    private readonly usage: UsageFetcher | null = null,
   ) {
     runner.coordinator = this;
+  }
+
+  startUsagePolling(): void {
+    if (!this.usage || this.usageTimer) return;
+    void this.refreshUsage();
+    this.usageTimer = setInterval(() => void this.refreshUsage(), USAGE_POLL_MS);
+    this.usageTimer.unref();
+  }
+
+  stopUsagePolling(): void {
+    if (this.usageTimer) clearInterval(this.usageTimer);
+    this.usageTimer = null;
+  }
+
+  // Reads every provider's usage API and records both windows. Concurrent calls share one read.
+  refreshUsage(force = true): Promise<void> {
+    const fetcher = this.usage;
+    if (!fetcher) return Promise.resolve();
+    const now = this.clock();
+    const recent = [...this.usageChecks.values()].some((c) => now - Date.parse(c.at) < RECHECK_MS);
+    if (!force && recent) return Promise.resolve();
+    this.usagePending ??= (async () => {
+      for (const { id: provider } of PROVIDERS) {
+        let error: string | null = null;
+        try {
+          const readings = await fetcher(provider);
+          if (!readings) continue;
+          for (const r of readings) this.observe({ provider, ...r, rejected: r.usedPercent !== null && r.usedPercent >= 100, source: "api" });
+        } catch (e) {
+          error = (e as Error).message || "Usage request failed.";
+        }
+        this.usageChecks.set(provider, { at: new Date(this.clock()).toISOString(), error });
+      }
+      this.changed();
+    })().finally(() => {
+      this.usagePending = null;
+    });
+    return this.usagePending;
   }
 
   config(): CoordinatorConfig {
@@ -82,14 +132,15 @@ export class Coordinator implements RunCoordinator {
     const key = `${input.provider}:${input.window}` as const;
     const previous = readings[key];
     const plan = this.config().plans[input.provider];
-    let { usedPercent, resetsAt } = input;
+    let { resetsAt } = input;
     // A failed run, or an owner reading without a reset time: assume a full window from now (the
     // plan's reset for the week), so the reading expires instead of holding work forever.
-    if (input.source !== "cli" && !resetsAt)
+    if ((input.source === "owner" || input.source === "error") && !resetsAt)
       resetsAt = new Date(input.window === "session" ? now + plan.sessionHours * 3_600_000 : nextWeeklyReset(plan, now)).toISOString();
-    // Some reports carry only the reset time; keep the last percentage of the same window.
-    if (usedPercent === null && previous && previous.resetsAt === resetsAt) usedPercent = previous.usedPercent;
-    readings[key] = { ...input, usedPercent, resetsAt, at: new Date(now).toISOString() };
+    // The CLI mostly reports only the reset time. For the window already read, that adds nothing, and
+    // replacing the reading would drop its percentage. Sources round the same reset differently.
+    if (input.usedPercent === null && !input.rejected && previous?.usedPercent != null && sameReset(previous.resetsAt, resetsAt)) return;
+    readings[key] = { ...input, resetsAt, at: new Date(now).toISOString() };
     this.store.setStateJson(READINGS_KEY, readings);
     this.changed();
     this.runner.tick();
@@ -116,6 +167,7 @@ export class Coordinator implements RunCoordinator {
         weekly,
         running: running.filter((r) => this.runner.runProvider(r) === provider).length,
         queued: queued.filter((r) => this.runner.runProvider(r) === provider).length,
+        usageCheck: this.usageChecks.get(provider) ?? null,
       };
     });
   }
@@ -275,6 +327,11 @@ export function registerCoordinatorRoutes(app: FastifyInstance, coordinator: Coo
     const body = parse(quotaReadingBody, request.body, reply);
     if (!body) return;
     coordinator.observe({ ...body, rejected: body.usedPercent >= 100, source: "owner" });
+    return coordinator.view();
+  });
+
+  app.post("/api/coordinator/refresh", async () => {
+    await coordinator.refreshUsage(false);
     return coordinator.view();
   });
 
