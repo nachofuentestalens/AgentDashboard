@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { App } from "../src/app.ts";
-import type { BaselinePreview, ProjectBaseline } from "@ad/shared";
+import type { BaselinePreview, DeliveryPlanPreview, ProjectBaseline } from "@ad/shared";
 import { Workspaces } from "../src/workspaces.ts";
 import { api, git, gitRepo, newProject, newTask, stepFinished, testApp, waitFor } from "./helpers.ts";
 
@@ -128,5 +128,63 @@ describe("managed project delivery", () => {
     await waitFor(() => app.store.listRuns(second.id).at(-1)?.waitReason?.includes("conflicting") === true);
     expect(app.runner.activeCount()).toBe(0);
     expect(git(b.path, "status", "--porcelain")).toBe("");
+  });
+
+  it("imports the committed milestone plan, returns legacy closures to review and pauses until enabled", async () => {
+    const { repo, projectId, programmer, qa, endpoint, snapshot } = await setup();
+    const spec = await newTask(app, projectId, { roleId: programmer, title: "Spec" });
+    const check = await newTask(app, projectId, { roleId: qa, title: "Check" });
+    const unbuilt = await newTask(app, projectId, { roleId: programmer, title: "Unbuilt" });
+    app.store.updateTask(spec.id, { stage: "closed" });
+    app.store.updateTask(unbuilt.id, { stage: "closed" });
+    const milestone = {
+      projectId,
+      tasks: [
+        { id: "T-1", role: "Gameplay Programmer", dependsOn: [], inputs: [], deliverables: ["spec.md"], report: "reports/t1.md" },
+        { id: "T-2", role: "QA Tester", dependsOn: ["T-1"], inputs: ["README.md"], deliverables: ["qa.md"], report: "reports/t2.md" },
+        { id: "T-3", role: "Gameplay Programmer", dependsOn: [], inputs: [], deliverables: ["missing.md"], report: "reports/t3.md" },
+      ],
+    };
+    fs.mkdirSync(path.join(repo, "planning"));
+    fs.writeFileSync(path.join(repo, "planning", "milestone.json"), JSON.stringify(milestone));
+    fs.writeFileSync(
+      path.join(repo, "planning", "dashboard-state.json"),
+      JSON.stringify({ projectId, tasks: { "T-1": spec.id, "T-2": check.id, "T-3": unbuilt.id } }),
+    );
+    fs.writeFileSync(path.join(repo, "AGENTS.md"), "rules");
+    fs.writeFileSync(path.join(repo, "spec.md"), "spec");
+    await snapshot(["AGENTS.md", "planning/dashboard-state.json", "planning/milestone.json", "spec.md"]);
+
+    const preview = await api<DeliveryPlanPreview>(app, "POST", `${endpoint}/plan`);
+    expect(preview.status).toBe(200);
+    const byId = new Map(preview.body.entries.map((e) => [e.milestoneId, e]));
+    expect(byId.get("T-1")).toMatchObject({ fromStage: "closed", toStage: "needs_review", missingOutputs: [] });
+    expect(byId.get("T-2")).toMatchObject({ toStage: "backlog", dependencyIds: [spec.id], requiredPaths: ["AGENTS.md", "README.md", "spec.md"] });
+    expect(byId.get("T-3")).toMatchObject({ toStage: "backlog", missingOutputs: ["missing.md"] });
+
+    // Any task edit after preview makes the reviewed import stale.
+    app.store.updateTask(check.id, { priority: 5 });
+    expect((await api(app, "POST", `${endpoint}/plan/approve`, { previewId: preview.body.id })).status).toBe(409);
+    const fresh = await api<DeliveryPlanPreview>(app, "POST", `${endpoint}/plan`);
+    expect((await api(app, "POST", `${endpoint}/plan/approve`, { previewId: fresh.body.id })).status).toBe(200);
+
+    expect(app.store.getTask(spec.id)).toMatchObject({ stage: "needs_review" });
+    expect(app.store.taskApproved(app.store.getTask(spec.id)!)).toBe(false);
+    expect(app.store.getTask(check.id)).toMatchObject({ stage: "backlog", dependencyIds: [spec.id] });
+    expect(app.store.deliveryPaused(projectId)).toBe(true);
+    expect(app.store.getProject(projectId)!.startNextWhenIdle).toBe(false);
+
+    // A queued successor waits while paused, even though nothing else blocks it yet.
+    app.runner.send(unbuilt.id, "Build it");
+    await waitFor(() => app.store.listRuns(unbuilt.id).at(-1)?.waitReason?.includes("paused") === true);
+    expect(app.runner.activeCount()).toBe(0);
+    expect((await api(app, "POST", `/api/runs/${app.store.listRuns(unbuilt.id).at(-1)!.id}/stop`)).status).toBe(202);
+
+    expect(app.store.dependencyBlocker(app.store.getTask(check.id)!)).toContain("owner approval");
+    expect((await api(app, "POST", `/api/tasks/${spec.id}/actions`, { action: "approve" })).status).toBe(200);
+    expect(app.store.dependencyBlocker(app.store.getTask(check.id)!)).toBeNull();
+    expect((await api(app, "POST", `${endpoint}/enable`)).status).toBe(200);
+    expect(app.store.deliveryPaused(projectId)).toBe(false);
+    expect(app.store.getProject(projectId)).toMatchObject({ autoReview: true, startNextWhenIdle: true, autoContinueSteps: 0 });
   });
 });

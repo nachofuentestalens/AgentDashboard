@@ -8,6 +8,8 @@ Writing runs use a persistent Git worktree and branch per task. The project chec
 
 Tasks can declare required committed paths and prerequisite task IDs. Their queue waits until the execution checkout contains those paths and the approved prerequisite commits. Persistent worktrees are checked too; they are never silently rebased or reset. See [Task prerequisites](DEPENDENCIES.md).
 
+With a managed baseline (see [Managed baseline and delivery](DEPENDENCIES.md#managed-baseline-and-delivery)), new task worktrees start from the approved baseline commit instead of HEAD, and existing ones receive later baselines as a fast-forward merge that keeps their checkpointed WIP. A refresh clears the agent session, so the next run starts fresh on the new files.
+
 A new writing task starts from the project's last commit. Existing staged, unstaged and untracked files in the project checkout are left untouched and are not copied into the task or attributed to it; the run posts a notice when there are any. Commit them first if the agent needs to see them. Ignored files are excluded. An empty Git repository gets an empty orphan task baseline without moving its primary branch or index. Existing task worktrees resume even if the primary checkout later becomes dirty. Changing a project's repository does not redirect an existing task's worktree.
 
 ## Checkpoint and resume

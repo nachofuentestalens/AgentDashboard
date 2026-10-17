@@ -27,3 +27,24 @@ test("owner sets prerequisites and sees why a task cannot start", async ({ page,
   // The suite shares a server; do not leave duplicate department labels in later tests.
   expect((await request.delete(`/api/projects/${project.id}`)).ok()).toBe(true);
 });
+
+test("owner reviews and approves a baseline snapshot without touching the project folder", async ({ page, request }) => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "ad-delivery-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
+  git("init", "-q", "-b", "main");
+  fs.writeFileSync(path.join(repo, "README.md"), "committed\n");
+  git("add", ".");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial");
+  fs.writeFileSync(path.join(repo, "contract.md"), "reviewed contract\n");
+  const project = await (await request.post("/api/projects", { data: { name: "Delivery", repoPath: repo } })).json();
+  await page.goto(`/projects/${project.id}`);
+  await page.getByText("Delivery & baseline", { exact: true }).click();
+  await page.getByLabel("contract.md", { exact: true }).check();
+  await page.getByRole("button", { name: "Prepare baseline preview" }).click();
+  const preview = page.getByRole("region", { name: "Baseline preview" });
+  await expect(preview.getByText("+reviewed contract")).toBeVisible();
+  await preview.getByRole("button", { name: "Approve this baseline" }).click();
+  await expect(page.getByText("Approved baseline:")).toBeVisible();
+  expect(git("status", "--porcelain").trim()).toBe("?? contract.md");
+  expect((await request.delete(`/api/projects/${project.id}`)).ok()).toBe(true);
+});
