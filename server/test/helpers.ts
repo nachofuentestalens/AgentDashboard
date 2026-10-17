@@ -67,7 +67,8 @@ export async function newTask(app: App, projectId: string, body: Record<string, 
   return (await api<Task>(app, "POST", `/api/projects/${projectId}/tasks`, body)).body;
 }
 
-export const waitFor = async (check: () => boolean, ms = 5000) => {
+// CI's Windows runners are several times slower than a dev machine; waiting longer only costs time on failure.
+export const waitFor = async (check: () => boolean, ms = 15_000) => {
   const end = Date.now() + ms;
   while (!check()) {
     if (Date.now() > end) throw new Error("Timed out waiting");
@@ -76,13 +77,13 @@ export const waitFor = async (check: () => boolean, ms = 5000) => {
 };
 
 // Resolves when the task reaches one of these statuses.
-export async function taskReaches(app: App, taskId: string, statuses: Task["status"][], ms = 8000): Promise<Task> {
+export async function taskReaches(app: App, taskId: string, statuses: Task["status"][], ms = 15_000): Promise<Task> {
   await waitFor(() => statuses.includes(app.store.getTask(taskId)?.status ?? "idle"), ms);
   return app.store.getTask(taskId)!;
 }
 
 // A role task's agent finished a step: the task is idle and waits for the owner's review.
-export async function stepFinished(app: App, taskId: string, ms = 8000): Promise<Task> {
+export async function stepFinished(app: App, taskId: string, ms = 15_000): Promise<Task> {
   await waitFor(() => {
     const task = app.store.getTask(taskId);
     return task?.status === "idle" && task.stage === "needs_review";

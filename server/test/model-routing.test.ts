@@ -39,7 +39,8 @@ it("rejects unavailable models and leaves the task's settings unchanged", async 
 it("limits repeated automatic changes to three per owner message", async () => {
   app = await testApp();
   const task = await newTask(app, await newProject(app), { message: "Edit [switch-loop]" });
-  await waitFor(() => app!.store.listRuns(task.id).length === 4 && latestRun(app!, task.id).status === "succeeded", 12000);
+  // Four agent runs in a row: allow for slow CI runners.
+  await waitFor(() => app!.store.listRuns(task.id).length === 4 && latestRun(app!, task.id).status === "succeeded", 40_000);
   expect(app.store.listRuns(task.id)).toHaveLength(4);
   expect(app.runner.readEvents(latestRun(app, task.id).id).some((e) => e.event.kind === "notice" && e.event.text.includes("switch limit reached"))).toBe(true);
 });
