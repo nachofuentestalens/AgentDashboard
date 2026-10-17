@@ -144,6 +144,8 @@ export const DEFAULT_PRIORITY = 5;
 export const MAX_DELEGATION_DEPTH = 2;
 
 export interface Task {
+  dependencyIds: string[];
+  requiredPaths: string[];
   handoff: string | null;
   handoffRunId: string | null;
   autoCompact: boolean;
@@ -263,6 +265,56 @@ export interface TaskWorkspace {
   error: string | null;
 }
 
+export interface ProjectBaseline {
+  repoPath: string;
+  commit: string;
+  approvedAt: string;
+}
+
+export interface BaselinePreview {
+  approvesTask?: boolean;
+  id: string;
+  projectId: string;
+  repoPath: string;
+  kind: "snapshot" | "integration";
+  expectedBaseline: string | null;
+  baseCommit: string;
+  sourceCommit: string;
+  taskId: string | null;
+  commit: string;
+  diff: string;
+  files: string;
+  createdAt: string;
+}
+
+export interface DeliveryView {
+  baseline: ProjectBaseline | null;
+  preview: BaselinePreview | null;
+  tasks: { id: string; title: string; checkpoint: string; integrated: boolean }[];
+  snapshotFiles: string[];
+  planPreview: DeliveryPlanPreview | null;
+  paused: boolean;
+  planImported: boolean;
+}
+
+export interface DeliveryPlanPreview {
+  id: string;
+  projectId: string;
+  baseline: string;
+  fingerprint: string;
+  entries: {
+    taskId: string;
+    milestoneId: string;
+    title: string;
+    dependencyIds: string[];
+    requiredPaths: string[];
+    fromStage: TaskStage;
+    toStage: TaskStage;
+    report: string;
+    missingOutputs: string[];
+  }[];
+}
+
 // Where a task's worktree changes are, for lists. Null: no worktree or no changes yet.
 export type TaskGitState = "error" | "publish_failed" | "local" | "pr_open" | "merged";
 
@@ -278,6 +330,7 @@ export function taskGitState(w: TaskWorkspace | null): TaskGitState | null {
 }
 
 export interface TaskDetail {
+  readiness?: string | null;
   task: Task;
   messages: Message[];
   runs: Run[];
@@ -454,6 +507,8 @@ export type HandoffStatus = "pending" | "created" | "rejected";
 
 // A task one agent asked for another role.
 export interface Handoff {
+  dependencyIds?: string[];
+  requiredPaths?: string[];
   id: string;
   projectId: string;
   fromTaskId: string | null;

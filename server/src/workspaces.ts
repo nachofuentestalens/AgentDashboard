@@ -3,6 +3,7 @@ import path from "node:path";
 import type { TaskWorkspace } from "@ad/shared";
 import { COMMIT_ID, git } from "./git.ts";
 import type { Store } from "./store.ts";
+import { mergeCommit } from "./baseline.ts";
 
 const identity = ["-c", "user.name=AgentDashboard", "-c", "user.email=agentdashboard@localhost"];
 
@@ -39,6 +40,9 @@ export class Workspaces {
   }
 
   async ensure(taskId: string, repoPath: string, notice: (text: string) => void = () => {}): Promise<TaskWorkspace> {
+    const task = this.store.getTask(taskId)!;
+    const baseline = this.store.projectBaseline(task.projectId);
+    if (baseline && !samePath(baseline.repoPath, repoPath)) throw new Error("The approved baseline belongs to a different repository.");
     let workspace = this.store.getWorkspace(taskId);
     if (workspace && !samePath(workspace.repoPath, repoPath))
       throw new Error("This task belongs to its original repository. Create a new task for the new project path.");
@@ -46,13 +50,16 @@ export class Workspaces {
       // Uncommitted edits are not attributed to the task: it starts from the last commit, and the
       // live checkout is never touched, so they are safe. Refusing here would stop the dashboard fixing itself.
       const dirty = await checked(repoPath, ["status", "--porcelain"]);
-      if (dirty)
+      if (dirty && !baseline)
         notice(
           "The project folder has uncommitted changes. This task starts from the last commit, so the agent will not see them; they stay untouched in the project folder.",
         );
       const head = await git(repoPath, ["rev-parse", "--verify", "HEAD"]);
       let baseCommit: string;
-      if (head.ok && COMMIT_ID.test(head.stdout)) baseCommit = head.stdout;
+      if (baseline) {
+        await checked(repoPath, ["cat-file", "-e", `${baseline.commit}^{commit}`]);
+        baseCommit = baseline.commit;
+      } else if (head.ok && COMMIT_ID.test(head.stdout)) baseCommit = head.stdout;
       else {
         const branch = await checked(repoPath, ["symbolic-ref", "HEAD"]);
         const existing = await git(repoPath, ["show-ref", "--verify", branch]);
@@ -72,8 +79,8 @@ export class Workspaces {
         path: workPath,
         branch: `agent/task-${taskId}`,
         baseCommit,
-        checkpointCommit: null,
-        checkpointAt: null,
+        checkpointCommit: baseline ? baseCommit : null,
+        checkpointAt: baseline ? new Date().toISOString() : null,
         error: null,
         publishedCommit: null,
         githubRepo: null,
@@ -99,7 +106,29 @@ export class Workspaces {
     await this.verify(workspace);
     if (!this.available()) throw new Error("Dashboard is shutting down; the worktree is preserved.");
     this.store.updateTask(taskId, { baseCommit: workspace.baseCommit });
-    return workspace;
+    return (await this.refresh(taskId)) ?? workspace;
+  }
+
+  async refresh(taskId: string): Promise<TaskWorkspace | null> {
+    const task = this.store.getTask(taskId)!;
+    const w = this.store.getWorkspace(taskId);
+    const baseline = this.store.projectBaseline(task.projectId);
+    if (!w || !baseline || w.baseCommit === baseline.commit) return w;
+    if (!samePath(w.repoPath, baseline.repoPath)) throw new Error("The task and approved baseline belong to different repositories.");
+    await this.verify(w);
+    if (await checked(w.path, ["status", "--porcelain"]))
+      throw new Error("Baseline refresh waits for a clean task checkpoint. Save its WIP first; files are preserved.");
+    const head = await checked(w.path, ["rev-parse", "HEAD"]);
+    if (head !== (w.checkpointCommit ?? w.baseCommit))
+      throw new Error("The task branch changed outside the dashboard. Save a fresh checkpoint before refreshing its baseline.");
+    if (task.stage === "approved" || task.stage === "closed" || w.mergeCommit) throw new Error("Start a new task for changes after approval or integration.");
+    const commit = await mergeCommit(w.path, head, baseline.commit, `Receive approved project baseline\n\nTask: ${taskId}\n`);
+    // Only fast-forward to the prepared merge. No reset, stash, rebase or conflict files.
+    if (commit !== head) await checked(w.path, ["-c", "core.hooksPath=", "merge", "--ff-only", "--no-edit", commit]);
+    const updated = { ...w, baseCommit: baseline.commit, checkpointCommit: commit, checkpointAt: new Date().toISOString(), approvedCommit: null, error: null };
+    this.store.saveWorkspace(updated);
+    this.store.updateTask(taskId, { baseCommit: baseline.commit, sessionStarted: false, sessionId: null, sessionProvider: null });
+    return updated;
   }
 
   async checkpoint(taskId: string, reason: string): Promise<TaskWorkspace | null> {

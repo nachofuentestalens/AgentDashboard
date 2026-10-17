@@ -25,6 +25,8 @@ import {
   type Message,
   type MessageRole,
   type Project,
+  type ProjectBaseline,
+  type DeliveryPlanPreview,
   type Proposal,
   type ProposalStatus,
   type Role,
@@ -40,6 +42,8 @@ import {
   type TaskSummary,
   type Usage,
 } from "@ad/shared";
+import { HttpError } from "./http.ts";
+import { nextStage } from "./stages.ts";
 import { transaction, type Db } from "./db.ts";
 
 type Row = Record<string, unknown>;
@@ -99,6 +103,8 @@ const toProject = (r: Row): Project => ({
 });
 
 const toTask = (r: Row): Task => ({
+  dependencyIds: JSON.parse(String(r.dependency_ids ?? "[]")),
+  requiredPaths: JSON.parse(String(r.required_paths ?? "[]")),
   handoff: str(r.handoff),
   handoffRunId: str(r.handoff_run_id),
   autoCompact: r.auto_compact === 1,
@@ -223,6 +229,8 @@ const toProposal = (r: Row): Proposal => ({
 });
 
 const toHandoff = (r: Row): Handoff => ({
+  dependencyIds: JSON.parse(String(r.dependency_ids ?? "[]")),
+  requiredPaths: JSON.parse(String(r.required_paths ?? "[]")),
   id: r.id as string,
   projectId: r.project_id as string,
   fromTaskId: str(r.from_task_id),
@@ -254,6 +262,8 @@ const toFeedback = (r: Row): FeedbackItem => ({
 export type TaskPatch = Partial<
   Pick<
     Task,
+    | "dependencyIds"
+    | "requiredPaths"
     | "title"
     | "status"
     | "sessionId"
@@ -284,6 +294,8 @@ export type TaskPatch = Partial<
 >;
 
 export interface NewTask {
+  dependencyIds?: string[];
+  requiredPaths?: string[];
   projectId: string;
   title: string;
   canEdit: boolean;
@@ -301,6 +313,61 @@ export interface NewTask {
 // All SQL lives here. Callers get typed objects and never see rows.
 export class Store {
   constructor(readonly db: Db) {}
+
+  projectBaseline(projectId: string): ProjectBaseline | null {
+    return this.getStateJson<ProjectBaseline>(`baseline.${projectId}`);
+  }
+
+  setProjectBaseline(projectId: string, baseline: ProjectBaseline): void {
+    this.setStateJson(`baseline.${projectId}`, baseline);
+  }
+
+  deliveryPaused(projectId: string): boolean {
+    return this.getStateJson<boolean>(`delivery-paused.${projectId}`) === true;
+  }
+
+  validateTaskPlan(projectId: string, entries: DeliveryPlanPreview["entries"]): void {
+    const tasks = new Map(this.listTasks(projectId).map((t) => [t.id, t]));
+    const overrides = new Map(entries.map((e) => [e.taskId, e.dependencyIds]));
+    if (overrides.size !== entries.length) throw new HttpError("The plan maps multiple entries to the same task.", 400);
+    const done = new Set<string>();
+    const visit = (id: string, stack: Set<string>) => {
+      if (stack.has(id)) throw new HttpError("The imported dependency graph contains a cycle.", 400);
+      if (done.has(id)) return;
+      const task = tasks.get(id);
+      if (!task?.roleId) throw new HttpError("The plan must reference existing role tasks in this project.", 400);
+      for (const dependency of overrides.get(id) ?? task.dependencyIds) visit(dependency, new Set(stack).add(id));
+      done.add(id);
+    };
+    for (const entry of entries) visit(entry.taskId, new Set());
+  }
+
+  applyTaskPlan(plan: DeliveryPlanPreview): void {
+    this.validateTaskPlan(plan.projectId, plan.entries);
+    transaction(this.db, () => {
+      // Clear only inside this transaction; adding the validated final graph cannot create an intermediate cycle.
+      for (const entry of plan.entries) this.db.prepare("UPDATE tasks SET dependency_ids = '[]' WHERE id = ?").run(entry.taskId);
+      for (const entry of plan.entries) {
+        const task = this.getTask(entry.taskId)!;
+        const transition =
+          task.stage === entry.toStage
+            ? { stage: task.stage }
+            : nextStage(task.stage!, entry.toStage === "needs_review" ? "recover_review" : "recover_backlog");
+        if (transition.error) throw new HttpError(transition.error, 409);
+        this.updateTask(task.id, {
+          dependencyIds: entry.dependencyIds,
+          requiredPaths: entry.requiredPaths,
+          stage: transition.stage,
+          status: task.status === "done" ? "idle" : task.status,
+          autoContinues: 0,
+        });
+      }
+      this.updateProject(plan.projectId, { startNextWhenIdle: false });
+      this.setStateJson(`delivery-paused.${plan.projectId}`, true);
+      this.setStateJson(`delivery-plan.${plan.projectId}`, plan);
+      this.setStateJson(`delivery-plan-preview.${plan.projectId}`, null);
+    });
+  }
 
   // ---- settings
 
@@ -509,6 +576,7 @@ export class Store {
   }
 
   createTask(input: NewTask): Task {
+    this.validateDependencies(input.projectId, null, input.dependencyIds ?? [], !!input.roleId);
     const id = randomUUID();
     const at = now();
     // Only role tasks get a stage (docs/TASK_STATES.md); plain chats keep it null.
@@ -541,22 +609,31 @@ export class Store {
         settings.defaultTokenBudget,
         settings.defaultToolBudget,
       );
+    this.db
+      .prepare("UPDATE tasks SET dependency_ids = ?, required_paths = ? WHERE id = ?")
+      .run(JSON.stringify(input.dependencyIds ?? []), JSON.stringify(input.requiredPaths ?? []), id);
     return this.getTask(id)!;
   }
 
   updateTask(id: string, patch: TaskPatch): Task | null {
     const current = this.getTask(id);
     if (!current) return null;
+    if (patch.dependencyIds) this.validateDependencies(current.projectId, id, patch.dependencyIds, !!current.roleId);
     const next = merge(current, patch);
     // stage_changed_at tracks the stage itself, not every field update, so the UI can show how
     // long a task has sat in its current stage.
     const stageChangedAt = patch.stage !== undefined && patch.stage !== current.stage ? now() : next.stageChangedAt;
+    if (patch.stage !== undefined && patch.stage !== current.stage) {
+      // Reopening or dropping work must not revive a historical approval.
+      if (patch.stage !== "closed") this.db.prepare("UPDATE tasks SET dependency_approved = ? WHERE id = ?").run(patch.stage === "approved" ? 1 : 0, id);
+      else if (current.stage !== "approved") this.db.prepare("UPDATE tasks SET dependency_approved = 0 WHERE id = ?").run(id);
+    }
     this.db
       .prepare(
         `UPDATE tasks SET title = ?, status = ?, session_id = ?, session_started = ?, session_provider = ?, can_edit = ?, provider = ?, model = ?, effort = ?,
            agent_id = ?, priority = ?, emergency = ?, question = ?, handoff = ?, handoff_run_id = ?, auto_compact = ?, token_budget = ?, tool_budget = ?,
            stage = ?, reviewer_role_id = ?, step_state = ?, step_summary = ?, next_step = ?, stage_changed_at = ?, base_commit = ?, auto_continues = ?,
-           updated_at = ? WHERE id = ?`,
+           dependency_ids = ?, required_paths = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.title,
@@ -585,6 +662,8 @@ export class Store {
         stageChangedAt,
         next.baseCommit,
         next.autoContinues,
+        JSON.stringify(next.dependencyIds),
+        JSON.stringify(next.requiredPaths),
         now(),
         id,
       );
@@ -595,6 +674,48 @@ export class Store {
   setTaskStatus(id: string, status: Task["status"]): Task | null {
     this.db.prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?").run(status, now(), id);
     return this.getTask(id);
+  }
+
+  validateDependencies(projectId: string, taskId: string | null, ids: string[], roleTask = true): void {
+    if (!roleTask && ids.length) throw new HttpError("Only role tasks can have dependencies.", 400);
+    if (new Set(ids).size !== ids.length) throw new HttpError("Duplicate dependencies are not allowed.", 400);
+    const visit = (id: string, seen: Set<string>) => {
+      if (id === taskId) throw new HttpError("Task dependencies cannot form a cycle.", 400);
+      if (seen.has(id)) return;
+      seen.add(id);
+      const task = this.getTask(id);
+      if (!task || task.projectId !== projectId || !task.roleId) throw new HttpError("Dependencies must be existing role tasks in this project.", 400);
+      for (const parent of task.dependencyIds) visit(parent, seen);
+    };
+    for (const id of ids) visit(id, new Set());
+  }
+
+  taskApproved(task: Task): boolean {
+    return (
+      (task.stage === "approved" || task.stage === "closed") &&
+      task.status !== "running" &&
+      task.status !== "queued" &&
+      this.db.prepare("SELECT dependency_approved FROM tasks WHERE id = ?").get(task.id)?.dependency_approved === 1
+    );
+  }
+
+  dependencyBlocker(task: Task, ancestors = new Set<string>()): string | null {
+    if (ancestors.has(task.id)) return "Dependency: cycle detected; repair the prerequisite graph.";
+    const visited = new Set(ancestors).add(task.id);
+    for (const id of task.dependencyIds) {
+      const prerequisite = this.getTask(id);
+      if (!prerequisite || prerequisite.projectId !== task.projectId) return "Dependency: prerequisite is missing: " + id;
+      const accepted = this.taskApproved(prerequisite);
+      if (!accepted || prerequisite.status === "running" || prerequisite.status === "queued")
+        return "Dependency: waiting for owner approval of " + prerequisite.title;
+      if (prerequisite.stepState === "done" && prerequisite.nextStep) return "Dependency: remaining steps must finish in " + prerequisite.title;
+      const upstream = this.dependencyBlocker(prerequisite, visited);
+      if (upstream) return upstream;
+      const workspace = this.getWorkspace(id);
+      if (workspace && (workspace.error || !workspace.approvedCommit || workspace.approvedCommit !== workspace.checkpointCommit))
+        return "Dependency: waiting for approval of the current checkpoint of " + prerequisite.title;
+    }
+    return null;
   }
 
   deleteTask(id: string): boolean {
@@ -1123,6 +1244,9 @@ export class Store {
         now(),
         input.status === "pending" ? null : now(),
       );
+    this.db
+      .prepare("UPDATE handoffs SET dependency_ids = ?, required_paths = ? WHERE id = ?")
+      .run(JSON.stringify(input.dependencyIds ?? []), JSON.stringify(input.requiredPaths ?? []), id);
     return this.getHandoff(id)!;
   }
 

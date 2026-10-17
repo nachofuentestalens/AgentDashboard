@@ -6,6 +6,7 @@ import { api, keys } from "../api.ts";
 import { Composer } from "../components/Composer.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { TaskBoard } from "../components/TaskBoard.tsx";
+import { DeliveryPanel } from "../components/DeliveryPanel.tsx";
 import { ErrorNote, PrioritySelect, selectClass, Toggle } from "../components/ui.tsx";
 import { DocsTab } from "./DocsTab.tsx";
 import { FeedbackTab } from "./FeedbackTab.tsx";
@@ -113,6 +114,7 @@ function TasksTab({ project }: { project: Project }) {
 
   return (
     <div className="mx-auto max-w-4xl space-y-8 px-8 py-6">
+      <DeliveryPanel projectId={project.id} />
       <section>
         <h2 className="mb-2 text-sm font-semibold text-ink-200">{role ? `New task for ${role.name}` : "New chat"}</h2>
         <Composer

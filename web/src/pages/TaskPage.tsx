@@ -24,6 +24,11 @@ export function TaskPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const detail = useQuery({ queryKey: keys.task(taskId), queryFn: () => api.task(taskId) });
+  const projectTasks = useQuery({
+    queryKey: keys.tasks(detail.data?.task.projectId ?? ""),
+    queryFn: () => api.tasks(detail.data!.task.projectId),
+    enabled: !!detail.data?.task.roleId,
+  });
   const project = useQuery({
     queryKey: keys.project(detail.data?.task.projectId ?? ""),
     queryFn: () => api.project(detail.data!.task.projectId),
@@ -32,7 +37,10 @@ export function TaskPage() {
 
   const update = useMutation({
     mutationFn: (body: Parameters<typeof api.updateTask>[1]) => api.updateTask(taskId, body),
-    onSuccess: (task) => qc.setQueryData<TaskDetail>(keys.task(taskId), (old) => (old ? { ...old, task } : old)),
+    onSuccess: (task) => {
+      qc.setQueryData<TaskDetail>(keys.task(taskId), (old) => (old ? { ...old, task } : old));
+      void qc.invalidateQueries({ queryKey: keys.task(taskId) });
+    },
   });
   const send = useMutation({
     mutationFn: (text: string) => api.send(taskId, text),
@@ -220,6 +228,51 @@ export function TaskPage() {
           <ErrorNote error={checkpoint.error} />
           <ErrorNote error={github.error} />
         </div>
+      )}
+      {task.roleId && (
+        <details className="border-b border-ink-800 px-6 py-3 text-xs text-ink-300">
+          <summary>
+            Prerequisites ({task.dependencyIds.length}){detail.data.readiness ? " · Blocked" : ""}
+          </summary>
+          <p className="my-2">Tasks wait for owner approval and committed inputs. Priority and Run anyway cannot bypass these checks.</p>
+          {detail.data.readiness && <p className="my-2 text-amber-300">{detail.data.readiness}</p>}
+          <label className="block">
+            Depends on
+            <select
+              multiple
+              aria-label="Depends on"
+              className={`${selectClass} block w-full`}
+              value={task.dependencyIds}
+              disabled={busy || task.status === "queued" || update.isPending}
+              onChange={(e) => update.mutate({ dependencyIds: Array.from(e.target.selectedOptions, (o) => o.value) })}
+            >
+              {projectTasks.data
+                ?.filter((t) => t.roleId && t.id !== task.id)
+                .map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.title} ({t.stage})
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="mt-2 block">
+            Required committed paths (one per line)
+            <textarea
+              aria-label="Required committed paths"
+              className="block w-full bg-ink-900 p-2"
+              key={task.requiredPaths.join("\n")}
+              defaultValue={task.requiredPaths.join("\n")}
+              disabled={busy || task.status === "queued" || update.isPending}
+              onBlur={(e) => {
+                const requiredPaths = e.target.value
+                  .split("\n")
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+                if (JSON.stringify(requiredPaths) !== JSON.stringify(task.requiredPaths)) update.mutate({ requiredPaths });
+              }}
+            />
+          </label>
+        </details>
       )}
       {task.stage && (task.stepSummary || task.nextStep || task.stepState === "complete") && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-ink-800 px-6 py-2 text-xs text-ink-300" aria-label="Step report">

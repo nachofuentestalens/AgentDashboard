@@ -1,4 +1,8 @@
 import type {
+  BaselinePreview,
+  DeliveryView,
+  ProjectBaseline,
+  DeliveryPlanPreview,
   ModelCatalog,
   Agent,
   AddFeedbackBody,
@@ -64,6 +68,13 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 type Saved = { commitError: string | null };
 
 export const api = {
+  delivery: (id: string) => request<DeliveryView>("GET", `/api/projects/${id}/delivery`),
+  previewDeliveryPlan: (id: string) => request<DeliveryPlanPreview>("POST", `/api/projects/${id}/delivery/plan`),
+  approveDeliveryPlan: (id: string, previewId: string) => request<DeliveryPlanPreview>("POST", `/api/projects/${id}/delivery/plan/approve`, { previewId }),
+  enableDelivery: (id: string) => request<{ enabled: boolean }>("POST", `/api/projects/${id}/delivery/enable`),
+  previewBaseline: (id: string, paths: string[]) => request<BaselinePreview>("POST", `/api/projects/${id}/delivery/snapshot`, { paths }),
+  previewIntegration: (id: string, taskId: string) => request<BaselinePreview>("POST", `/api/projects/${id}/delivery/integrate`, { taskId }),
+  approveBaseline: (id: string, previewId: string) => request<ProjectBaseline>("POST", `/api/projects/${id}/delivery/approve`, { previewId }),
   models: () => request<ModelCatalog>("GET", "/api/models"),
   settings: () => request<Settings>("GET", "/api/settings"),
   updateSettings: (body: UpdateSettingsBody) => request<Settings>("PATCH", "/api/settings", body),

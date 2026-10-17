@@ -54,7 +54,24 @@ export const updateProjectBody = z.object({
   startNextWhenIdle: z.boolean().optional(),
 });
 
+export const dependencyIds = z.array(z.string().trim().min(1).max(64)).max(100);
+export const requiredPaths = z
+  .array(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .max(300)
+      .refine(
+        (p) => !p.includes("\\") && !p.includes(":") && !p.startsWith("/") && p.split("/").every((s) => s && s !== "." && s !== ".."),
+        "Use a relative repository path without traversal.",
+      ),
+  )
+  .max(100);
+
 export const createTaskBody = z.object({
+  dependencyIds: dependencyIds.optional(),
+  requiredPaths: requiredPaths.optional(),
   title: z.string().trim().max(120).optional(),
   canEdit: z.boolean().optional(),
   // The first message, sent right away when present.
@@ -72,6 +89,8 @@ const tokenBudget = z.number().int().min(1).max(1_000_000_000).nullable();
 const toolBudget = z.number().int().min(1).max(100_000).nullable();
 
 export const updateTaskBody = z.object({
+  dependencyIds: dependencyIds.optional(),
+  requiredPaths: requiredPaths.optional(),
   tokenBudget: tokenBudget.optional(),
   toolBudget: toolBudget.optional(),
   autoCompact: z.boolean().optional(),

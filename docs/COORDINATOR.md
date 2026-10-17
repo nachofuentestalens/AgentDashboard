@@ -4,6 +4,8 @@ The coordinator is a dashboard-wide tab (`/coordinator`). It watches each provid
 
 It is deterministic, not an agent. A model deciding about tokens would spend tokens, and a rule set can be tested as a table, like the scheduler.
 
+Dependency readiness is enforced by the runner, separately from usage policy. Fill-idle skips unapproved prerequisites; queued work also waits for committed inputs and integrated prerequisite commits. Neither automatic mode nor Run anyway bypasses those checks. See [Task prerequisites](DEPENDENCIES.md).
+
 ## Pieces
 
 - `server/src/coordinator.ts`: the pure rules. Usage estimates (`estimateWindow`), levels (`windowLevel`, `providerLevel`), scheduler holds (`providerHolds`) and decisions (`decide`). Change rules here and in `server/test/coordinator.test.ts`.

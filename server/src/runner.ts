@@ -40,6 +40,7 @@ import { efficiencyInstructions, extractHandoff, HANDOFF_REQUEST, totalTokens } 
 import { modelRoutingInstructions, parseModelReview, validateModelReview } from "./model-routing.ts";
 import { Workspaces } from "./workspaces.ts";
 import { Github } from "./github.ts";
+import { baselineBlocker } from "./readiness.ts";
 
 export class RunnerError extends HttpError {}
 
@@ -95,7 +96,9 @@ export class Runner {
   private readonly workspaces: Workspaces;
   private readonly github: Github;
   private readonly workspaceBusy = new Set<string>();
+  private readonly deliveryBusy = new Set<string>();
   private tickPending = false;
+  private tickAgain = false;
   private closed = false;
   private readonly recheck: NodeJS.Timeout;
   replies: ReplyHandler | null = null;
@@ -130,6 +133,34 @@ export class Runner {
 
   activeCount(): number {
     return this.active.size;
+  }
+
+  isProjectBusy(projectId: string): boolean {
+    return this.deliveryBusy.has(projectId);
+  }
+
+  async deliveryOperation<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
+    if (this.isProjectBusy(projectId)) throw new RunnerError("A delivery operation is already running for this project.", 409);
+    if (this.store.listTasks(projectId).some((t) => this.isTaskRunning(t.id)))
+      throw new RunnerError("Wait for this project's running agents and checkpoint operations before changing its baseline.", 409);
+    this.deliveryBusy.add(projectId);
+    try {
+      return await operation();
+    } finally {
+      this.deliveryBusy.delete(projectId);
+      this.bus.publish({ type: "studio_changed", projectId });
+      this.tick();
+    }
+  }
+
+  async verifyWorkspaceSnapshot(taskId: string): Promise<void> {
+    const w = this.store.getWorkspace(taskId);
+    if (!w) throw new RunnerError("Task workspace not found.", 404);
+    await this.workspaces.verify(w);
+    const head = await git(w.path, ["rev-parse", "HEAD"]);
+    const dirty = await git(w.path, ["status", "--porcelain"]);
+    if (!head.ok || head.stdout !== w.checkpointCommit || !dirty.ok || dirty.stdout)
+      throw new RunnerError("Save and approve a fresh checkpoint before integrating. The task worktree changed.", 409);
   }
 
   private stagePatch(roleId: Task["roleId"], stage: Task["stage"], event: StageEvent): Partial<Pick<Task, "stage">> {
@@ -188,8 +219,9 @@ export class Runner {
 
   // The owner moves a role task through its stages. Moves that start work send a message, and the
   // run start applies the stage change; the others only change the stage.
-  stageAction(taskId: string, action: Exclude<TaskAction, { action: "review" }>): Task {
-    const task = this.requireIdleTask(taskId);
+  stageAction(taskId: string, action: Exclude<TaskAction, { action: "review" }>, deliveryApproval = false): Task {
+    if (deliveryApproval && action.action !== "approve") throw new RunnerError("Delivery may only approve the reviewed task.", 400);
+    const task = this.requireIdleTask(taskId, deliveryApproval);
     if (!task.roleId || !task.stage) throw new RunnerError("Only a role's task has stages. Use Mark done for a chat.", 400);
     const check = nextStage(task.stage, action.action);
     // Start is also how a run resumes in progress work, but as an owner move it begins backlog work.
@@ -415,20 +447,33 @@ export class Runner {
 
   // Runs a scheduling pass soon. Calls in the same turn of the event loop share one pass.
   tick(): void {
-    if (this.tickPending || this.closed) return;
+    if (this.closed) return;
+    if (this.tickPending) {
+      this.tickAgain = true;
+      return;
+    }
     this.tickPending = true;
-    setImmediate(() => {
-      this.tickPending = false;
-      if (this.closed) return;
-      this.startIdleBacklog();
-      let holds = new Map<Provider, ProviderHold>();
+    setImmediate(async () => {
       try {
-        holds = this.coordinator?.beforeSchedule() ?? holds;
+        if (this.closed) return;
+        this.startIdleBacklog();
+        let holds = new Map<Provider, ProviderHold>();
+        try {
+          holds = this.coordinator?.beforeSchedule() ?? holds;
+        } catch (error) {
+          // A coordinator fault must never stop the queue; it runs as if the coordinator were off.
+          console.error("Coordinator pass failed:", error);
+        }
+        await this.schedule(holds);
       } catch (error) {
-        // A coordinator fault must never stop the queue; it runs as if the coordinator were off.
-        console.error("Coordinator pass failed:", error);
+        console.error("Scheduling pass failed; queued work remains held:", error);
+      } finally {
+        this.tickPending = false;
+        if (this.tickAgain) {
+          this.tickAgain = false;
+          this.tick();
+        }
       }
-      this.schedule(holds);
     });
   }
 
@@ -456,8 +501,9 @@ export class Runner {
         .map((a) => a.roleId),
     );
     for (const project of projects) {
+      if (this.isProjectBusy(project.id) || this.store.deliveryPaused(project.id)) continue;
       for (const task of this.store.backlogTasks(project.id)) {
-        if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId)) continue;
+        if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId) || this.store.dependencyBlocker(task)) continue;
         busy.add(task.roleId);
         try {
           this.stageAction(task.id, { action: "start" });
@@ -468,9 +514,10 @@ export class Runner {
     }
   }
 
-  private requireIdleTask(taskId: string): Task {
+  private requireIdleTask(taskId: string, deliveryApproval = false): Task {
     const task = this.store.getTask(taskId);
     if (!task) throw new RunnerError("Task not found.", 404);
+    if (this.isProjectBusy(task.projectId) && !deliveryApproval) throw new RunnerError("Wait for the project's delivery operation to finish.", 409);
     if (this.isTaskRunning(taskId)) throw new RunnerError("An agent is already working on this task. Wait for it or stop it first.", 409);
     if (task.status === "queued") throw new RunnerError("This task is already queued for an agent. Wait for it or stop it first.", 409);
     return task;
@@ -666,7 +713,35 @@ export class Runner {
   }
 
   // One scheduling pass: start what may start, and tell queued runs why they wait.
-  private schedule(holds: Map<Provider, ProviderHold>): void {
+  private async schedule(holds: Map<Provider, ProviderHold>): Promise<void> {
+    const readiness = new Map<string, string | null>();
+    for (const run of this.store.runsWithStatus("queued")) {
+      const task = this.store.getTask(run.taskId);
+      const project = task && this.store.getProject(task.projectId);
+      if (task && project && run.purpose === "work") {
+        if (this.isProjectBusy(project.id)) {
+          readiness.set(run.id, "Baseline: a delivery operation is running.");
+          continue;
+        }
+        if (this.store.deliveryPaused(project.id)) {
+          readiness.set(run.id, "Baseline: delivery is paused for recovery. Review the imported outcomes, then enable delivery automation.");
+          continue;
+        }
+        const baseline = this.store.projectBaseline(project.id);
+        this.workspaceBusy.add(task.id);
+        try {
+          if (baseline && baseline.repoPath !== project.repoPath) throw new Error("The managed baseline belongs to the project's original repository.");
+          if (baseline && !this.store.dependencyBlocker(task) && this.store.getWorkspace(task.id)) await this.workspaces.refresh(task.id);
+          const w = this.store.getWorkspace(task.id);
+          readiness.set(run.id, await baselineBlocker(this.store, task, w?.path ?? project.repoPath, w ? "HEAD" : (baseline?.commit ?? "HEAD")));
+        } catch (error) {
+          readiness.set(run.id, `Baseline: ${(error as Error).message}`);
+        } finally {
+          this.workspaceBusy.delete(task.id);
+        }
+      }
+    }
+    if (this.closed) return;
     const queuedRuns = this.store.runsWithStatus("queued");
     if (queuedRuns.length === 0) return;
 
@@ -703,10 +778,14 @@ export class Runner {
         if (task) this.publishTask(this.store.updateTask(task.id, { status: "idle", ...this.reviewCancelled(run) }));
         continue;
       }
+      if (this.isProjectBusy(task.projectId)) continue;
+      // New arrivals during asynchronous Git checks wait for the next pass.
+      if (run.purpose === "work" && !readiness.has(run.id)) continue;
       const { effort, provider } = this.choice(this.actorTask(task, run));
       queued.push({
         provider,
         runId: run.id,
+        dependencyBlocker: run.purpose === "work" ? (this.store.dependencyBlocker(task) ?? readiness.get(run.id)) : null,
         projectId: task.projectId,
         roleId: role.id,
         roleName: role.name,
@@ -825,7 +904,8 @@ export class Runner {
     const role = actor.roleId ? this.store.getRole(actor.roleId) : null;
     // A session belongs to one provider. After a switch the conversation so far goes into the
     // prompt of a new session instead.
-    const movingToWorktree = canEdit && !this.store.getWorkspace(task.id);
+    const needsWorktree = canEdit || (!!task.roleId && !!this.store.projectBaseline(project.id) && queuedRun.purpose === "work");
+    const movingToWorktree = needsWorktree && !this.store.getWorkspace(task.id);
     const switched = actor.sessionStarted && ((actor.sessionProvider !== null && actor.sessionProvider !== provider) || movingToWorktree);
     const resume = actor.sessionStarted && actor.sessionId !== null && !switched;
     // Claude takes the id we choose; Codex picks one and reports it in its first event.
@@ -1096,7 +1176,7 @@ export class Runner {
 
     const startAgent = async () => {
       let workspace = this.store.getWorkspace(task.id);
-      if (canEdit) workspace = await this.workspaces.ensure(task.id, project.repoPath, (text) => record({ kind: "notice", level: "warn", text }));
+      if (needsWorktree) workspace = await this.workspaces.ensure(task.id, project.repoPath, (text) => record({ kind: "notice", level: "warn", text }));
       else if (workspace) await this.workspaces.verify(workspace);
       if (this.closed) return;
       if (active.stopRequested) {
@@ -1104,6 +1184,10 @@ export class Runner {
         return;
       }
       const repoPath = workspace?.path ?? project.repoPath;
+      if (run.purpose === "work") {
+        const blocked = await baselineBlocker(this.store, this.store.getTask(task.id)!, repoPath);
+        if (blocked) throw new Error(blocked);
+      }
       if (workspace) {
         record({ kind: "notice", level: "info", text: `Isolated worktree: ${workspace.path} (${workspace.branch}). The project checkout is unchanged.` });
         prompt +=

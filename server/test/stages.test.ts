@@ -43,6 +43,12 @@ const rows: { from: TaskStage; event: StageEvent; to?: TaskStage }[] = [
   { from: "changes_requested", event: "backlog", to: "backlog" },
   { from: "in_progress", event: "backlog" },
   { from: "closed", event: "backlog" },
+  { from: "closed", event: "recover_review", to: "needs_review" },
+  { from: "approved", event: "recover_review", to: "needs_review" },
+  { from: "backlog", event: "recover_review" },
+  { from: "in_progress", event: "recover_backlog", to: "backlog" },
+  { from: "closed", event: "recover_backlog", to: "backlog" },
+  { from: "in_review", event: "recover_backlog" },
 ];
 
 describe("nextStage", () => {
