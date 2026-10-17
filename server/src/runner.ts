@@ -536,7 +536,11 @@ export class Runner {
   private note(taskId: string, level: "info" | "warn", text: string): void {
     const run = this.store.listRuns(taskId).at(-1);
     if (!run || this.active.has(run.id)) return;
-    const stamped: StampedEvent = { seq: (this.readEvents(run.id).at(-1)?.seq ?? -1) + 1, at: new Date().toISOString(), event: { kind: "notice", level, text } };
+    const stamped: StampedEvent = {
+      seq: (this.readEvents(run.id).at(-1)?.seq ?? -1) + 1,
+      at: new Date().toISOString(),
+      event: { kind: "notice", level, text },
+    };
     fs.appendFileSync(this.eventsFile(run.id), JSON.stringify(stamped) + "\n");
     this.bus.publish({ type: "run_event", runId: run.id, taskId, stamped });
   }
@@ -734,7 +738,11 @@ export class Runner {
         const review = this.store.listTaskReviews(task.id).at(-1);
         if (!project.autoApprove || review?.runId !== ended.id || task.autoContinues >= AUTO_FIX_ROUNDS) return;
         this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
-        record({ kind: "notice", level: "info", text: `Sending the findings back to the author automatically (${task.autoContinues + 1} of ${AUTO_FIX_ROUNDS}).` });
+        record({
+          kind: "notice",
+          level: "info",
+          text: `Sending the findings back to the author automatically (${task.autoContinues + 1} of ${AUTO_FIX_ROUNDS}).`,
+        });
         this.send(task.id, ["Address these review findings:", ...review.findings.map((f) => `- ${f}`)].join("\n"), true);
         return;
       }

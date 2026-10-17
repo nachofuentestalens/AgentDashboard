@@ -268,10 +268,15 @@ const MIGRATIONS: (string | ((db: Db) => void))[] = [
     }
   },
   // 10: Hands-off delivery, and the checkpoint each agent review saw so an unchanged task is not reviewed again.
-  `
-  ALTER TABLE projects ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0;
-  ALTER TABLE task_reviews ADD COLUMN reviewed_commit TEXT;
-  `,
+  (db) => {
+    for (const [table, definition] of [
+      ["projects", "auto_approve INTEGER NOT NULL DEFAULT 0"],
+      ["task_reviews", "reviewed_commit TEXT"],
+    ]) {
+      const columns = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+      if (!columns.has(definition!.split(" ")[0]!)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+    }
+  },
 ];
 
 export type Db = DatabaseSync;
