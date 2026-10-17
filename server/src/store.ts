@@ -11,6 +11,7 @@ import {
   EFFORT_LEVELS,
   emptyUsage,
   isProvider,
+  taskGitState,
   type Provider,
   type Agent,
   type Autonomy,
@@ -64,6 +65,23 @@ function parseJson<T>(text: unknown, fallback: T): T {
 function merge<T extends object>(current: T, patch: Partial<T>): T {
   return { ...current, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) } as T;
 }
+
+const toWorkspace = (r: Row): TaskWorkspace => ({
+  taskId: String(r.task_id),
+  repoPath: String(r.repo_path),
+  path: String(r.path),
+  branch: String(r.branch),
+  baseCommit: String(r.base_commit),
+  checkpointCommit: str(r.checkpoint_commit),
+  checkpointAt: str(r.checkpoint_at),
+  publishedCommit: str(r.published_commit),
+  githubRepo: str(r.github_repo),
+  pullRequestUrl: str(r.pull_request_url),
+  publishError: str(r.publish_error),
+  mergeCommit: str(r.merge_commit),
+  approvedCommit: str(r.approved_commit),
+  error: str(r.error),
+});
 
 const toProject = (r: Row): Project => ({
   id: r.id as string,
@@ -409,6 +427,12 @@ export class Store {
          FROM tasks t WHERE t.project_id = ? ORDER BY t.updated_at DESC`,
       )
       .all(projectId) as Row[];
+    const workspaces = new Map(
+      (this.db.prepare("SELECT w.* FROM task_workspaces w JOIN tasks t ON t.id = w.task_id WHERE t.project_id = ?").all(projectId) as Row[]).map((r) => [
+        String(r.task_id),
+        toWorkspace(r),
+      ]),
+    );
     return rows.map((r) => ({
       ...toTask(r),
       messageCount: Number(r.message_count),
@@ -421,6 +445,7 @@ export class Store {
           }
         : null,
       steps: Number(r.steps_total) > 0 ? { done: Number(r.steps_done), total: Number(r.steps_total) } : null,
+      git: taskGitState(workspaces.get(String(r.id)) ?? null),
     }));
   }
 
@@ -465,24 +490,7 @@ export class Store {
 
   getWorkspace(taskId: string): TaskWorkspace | null {
     const r = this.db.prepare("SELECT * FROM task_workspaces WHERE task_id = ?").get(taskId) as Row | undefined;
-    return r
-      ? {
-          taskId: String(r.task_id),
-          repoPath: String(r.repo_path),
-          path: String(r.path),
-          branch: String(r.branch),
-          baseCommit: String(r.base_commit),
-          checkpointCommit: str(r.checkpoint_commit),
-          checkpointAt: str(r.checkpoint_at),
-          publishedCommit: str(r.published_commit),
-          githubRepo: str(r.github_repo),
-          pullRequestUrl: str(r.pull_request_url),
-          publishError: str(r.publish_error),
-          mergeCommit: str(r.merge_commit),
-          approvedCommit: str(r.approved_commit),
-          error: str(r.error),
-        }
-      : null;
+    return r ? toWorkspace(r) : null;
   }
 
   saveWorkspace(w: TaskWorkspace): void {

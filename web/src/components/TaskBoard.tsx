@@ -3,13 +3,14 @@ import { Link } from "react-router";
 import type { TaskSummary } from "@ad/shared";
 import { ago, cost } from "../format.ts";
 import { StageActions } from "./StageActions.tsx";
-import { PriorityBadge, StageBadge, StatusBadge } from "./ui.tsx";
+import { GitBadge, PriorityBadge, StageBadge, StatusBadge } from "./ui.tsx";
 
-type Group = "needsYou" | "working" | "upNext" | "approved" | "closed" | "chats";
+type Group = "needsYou" | "working" | "upNext" | "approved" | "closed" | "chats" | "chatsDone";
 
 // Whose move it is. Display only: the stage itself is decided on the server.
 function groupOf(t: TaskSummary): Group {
-  if (!t.roleId || !t.stage) return "chats";
+  // A chat is finished once the owner marks it done or its changes are merged.
+  if (!t.roleId || !t.stage) return t.status === "done" || t.git === "merged" ? "chatsDone" : "chats";
   if (t.status === "running" || t.status === "queued") return "working";
   if (t.stage === "closed") return "closed";
   if (t.stage === "approved") return "approved";
@@ -21,7 +22,7 @@ function groupOf(t: TaskSummary): Group {
 const since = (t: TaskSummary) => t.stageChangedAt ?? t.updatedAt;
 
 export function groupTasks(tasks: TaskSummary[]): Record<Group, TaskSummary[]> {
-  const groups: Record<Group, TaskSummary[]> = { needsYou: [], working: [], upNext: [], approved: [], closed: [], chats: [] };
+  const groups: Record<Group, TaskSummary[]> = { needsYou: [], working: [], upNext: [], approved: [], closed: [], chats: [], chatsDone: [] };
   for (const t of tasks) groups[groupOf(t)].push(t);
   groups.needsYou.sort((a, b) => since(a).localeCompare(since(b)));
   groups.upNext.sort((a, b) => Number(b.emergency) - Number(a.emergency) || b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
@@ -35,6 +36,7 @@ const SECTIONS: { group: Group; title: string; open: boolean }[] = [
   { group: "approved", title: "Approved", open: true },
   { group: "closed", title: "Closed", open: false },
   { group: "chats", title: "Chats", open: true },
+  { group: "chatsDone", title: "Finished chats", open: false },
 ];
 
 export function TaskBoard({ tasks, roleName }: { tasks: TaskSummary[]; roleName: (id: string | null) => string | undefined }) {
@@ -100,6 +102,7 @@ function TaskRow({ task: t, roleName, badge }: { task: TaskSummary; roleName: (i
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           <div className="flex items-center gap-2">
+            <GitBadge state={t.git} />
             <StageBadge stage={t.stage} />
             <StatusBadge status={t.status} />
           </div>

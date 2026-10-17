@@ -263,6 +263,20 @@ export interface TaskWorkspace {
   error: string | null;
 }
 
+// Where a task's worktree changes are, for lists. Null: no worktree or no changes yet.
+export type TaskGitState = "error" | "publish_failed" | "local" | "pr_open" | "merged";
+
+export function taskGitState(w: TaskWorkspace | null): TaskGitState | null {
+  if (!w) return null;
+  if (w.mergeCommit) return "merged";
+  if (w.error) return "error";
+  if (w.publishError) return "publish_failed";
+  // Commits newer than what GitHub has (or never published).
+  if (w.checkpointCommit && w.checkpointCommit !== w.baseCommit && w.checkpointCommit !== w.publishedCommit) return "local";
+  if (w.pullRequestUrl) return "pr_open";
+  return null;
+}
+
 export interface TaskDetail {
   task: Task;
   messages: Message[];
@@ -283,6 +297,7 @@ export interface TaskSummary extends Task {
   lastReview: Pick<TaskReview, "verdict" | "reviewer"> | null;
   // The agent's plan, when it gave one.
   steps: { done: number; total: number } | null;
+  git: TaskGitState | null;
 }
 
 export interface Settings {
