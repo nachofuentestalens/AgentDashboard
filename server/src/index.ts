@@ -18,6 +18,7 @@ const webDir = fileURLToPath(new URL("../../web/dist", import.meta.url));
 
 const { providerUsageFetcher } = await import("./usage.ts");
 const app = await buildApp({
+  restart: process.env.AGENT_DASHBOARD_SUPERVISED ? () => void shutdown(75) : undefined,
   dataDir,
   webDir: process.env.AGENT_DASHBOARD_DEV ? undefined : webDir,
   logger: true,
@@ -30,11 +31,11 @@ await app.fastify.listen({ host: HOST, port });
 console.log(`\n  AgentDashboard: http://${HOST}:${port}\n  Data: ${dataDir}\n`);
 
 let closing = false;
-const shutdown = async () => {
+const shutdown = async (code = 0) => {
   if (closing) return;
   closing = true;
   await app.close();
-  process.exit(0);
+  process.exit(code);
 };
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());

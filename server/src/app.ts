@@ -31,8 +31,10 @@ import { Studio } from "./studio.ts";
 import { registerStudioRoutes } from "./studio-routes.ts";
 import { Coordinator, registerCoordinatorRoutes } from "./coordination.ts";
 import type { UsageFetcher } from "./usage.ts";
+import { ServerRestart } from "./restart.ts";
 
 export interface AppOptions {
+  restart?: () => void;
   dataDir: string;
   // Built web app to serve; absent in dev, where Vite serves it and proxies /api here.
   webDir?: string;
@@ -77,6 +79,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   const coordinator = new Coordinator(store, bus, runner, Date.now, options.usage ?? null);
   coordinator.startUsagePolling();
   store.markInterrupted();
+  const restart = new ServerRestart(runner, store, options.dataDir, !!options.restart);
   const modelCatalog = await loadModelCatalog(options.dataDir, store.getSettings().codexPath, options.launchers?.codex);
   runner.modelOptions = modelCatalog.presets;
 
@@ -90,6 +93,8 @@ export async function buildApp(options: AppOptions): Promise<App> {
     if (!host || !LOOPBACK.has(host)) return reply.code(403).send({ error: "Forbidden host." });
     const origin = request.headers.origin;
     if (origin && !LOOPBACK.has(hostnameOf(origin) ?? "")) return reply.code(403).send({ error: "Forbidden origin." });
+    if (runner.restartHeld && !["GET", "HEAD"].includes(request.method) && !request.url.startsWith("/api/server/restart"))
+      return reply.code(409).send({ error: "Server restart requested. Cancel preparation before changing work." });
   });
 
   // JSON only: a cross-site HTML form can send text/plain or form data without a preflight.
@@ -106,6 +111,15 @@ export async function buildApp(options: AppOptions): Promise<App> {
   const projectsChanged = () => bus.publish({ type: "projects_changed" });
 
   // ---- settings
+
+  app.get("/api/server/restart", async () => restart.status());
+  app.post("/api/server/restart/request", async () => restart.request());
+  app.post("/api/server/restart/cancel", async () => restart.cancel());
+  app.post("/api/server/restart/confirm", async (_request, reply) => {
+    await restart.confirm();
+    reply.raw.once("finish", () => setImmediate(() => options.restart?.()));
+    return { restarting: true };
+  });
 
   app.get("/api/settings", async () => store.getSettings());
   app.get("/api/models", async () => modelCatalog);
@@ -376,8 +390,10 @@ export async function buildApp(options: AppOptions): Promise<App> {
     studio,
     bus,
     close: async () => {
+      restart.close();
       coordinator.stopUsagePolling();
       runner.close();
+      app.server.closeAllConnections();
       await app.close();
       db.close();
     },

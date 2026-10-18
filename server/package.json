@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false --disable-warning=ExperimentalWarning src/index.ts",
-    "start": "tsx --disable-warning=ExperimentalWarning src/index.ts"
+    "dev": "tsx watch --clear-screen=false --include \"src/**/*.ts\" --include \"../shared/src/**/*.ts\" ../scripts/server.mjs",
+    "start": "node ../scripts/server.mjs"
   },
   "dependencies": {
     "@ad/shared": "workspace:*",
