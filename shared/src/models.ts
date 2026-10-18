@@ -564,6 +564,8 @@ export interface Inbox {
   changes: InboxQuestion[];
   // Queued runs held back by a budget or an emergency, which the owner can run anyway.
   held: InboxRun[];
+  // Queued runs whose prerequisites are not in their baseline: they wait until the owner integrates them.
+  blocked: InboxRun[];
   count: number;
 }
 

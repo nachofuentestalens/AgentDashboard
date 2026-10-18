@@ -3,7 +3,17 @@ import { attentionItems, finishedRunAlert, newAttention } from "../src/attention
 import type { Inbox, Run, Task } from "../src/models.ts";
 
 const task = (id: string, extra: Partial<Task> = {}) => ({ id, title: `Task ${id}`, question: null, stageChangedAt: "t1", ...extra }) as Task;
-const inbox = (parts: Partial<Inbox>): Inbox => ({ proposals: [], handoffs: [], questions: [], reviews: [], changes: [], held: [], count: 0, ...parts });
+const inbox = (parts: Partial<Inbox>): Inbox => ({
+  proposals: [],
+  handoffs: [],
+  questions: [],
+  reviews: [],
+  changes: [],
+  held: [],
+  blocked: [],
+  count: 0,
+  ...parts,
+});
 
 describe("attention", () => {
   it("lists inbox items with links, and announces only new ones", () => {
