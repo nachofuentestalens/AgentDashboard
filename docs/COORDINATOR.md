@@ -47,8 +47,13 @@ Weekly pace: by a given point in the week, usage should be at most `(100 − R) 
 
 - **Pause**: a running role run on a provider in reserve or exhausted. Emergencies and "run anyway" runs are excluded. The run stops through the normal stop path (a checkpoint for writers) with the reason as its error.
 - **Resume**: a task the coordinator paused, when its provider allows its priority again. It retries the paused run. If the owner has since sent a message or started another run, the task is no longer tracked as paused.
-- **Start** (`fillIdle`): within 2 hours of a session reset, with at least 25% left above the reserve and nothing queued for that provider, it starts the top backlog task of a staffed role on that provider.
-- **Switch** (`switchProvider`): queued work held on one provider moves to the other one when the other is at "ok" (never to an unknown provider). This sets the task's provider and clears its model and effort, so the role's or project's choice applies.
+- **Start** (`fillIdle`): with at least 25% session usage left above the reserve and nothing queued for that provider, it starts eligible backlog work. It does not wait for a reset timestamp or the last two hours of a window. Providers must be at "ok", including the weekly usage policy.
+- **Automatic assignment** (`fillIdle`): work in projects with `startNextWhenIdle` enabled can move to a provider with more available capacity, even when its original provider is not held. Providers are ranked by session headroom above the reserve divided by one plus their running and queued load (including owner chats). The candidate itself is excluded from its source's load; ties keep its current provider. Planned moves count toward later decisions in the same pass. Unknown, conserving, reserved and exhausted destinations are excluded. Manual projects retain their provider unless the separate held-work switch policy applies. Forced runs, emergencies and reviews are not reassigned.
+- **Switch held work** (`switchProvider`): queued work held on one provider moves to the other one when the other is at "ok" (never to an unknown provider).
+
+Both assignment paths set the task's provider and clear its model and effort so the destination's defaults apply. Each work run then uses the existing review-first model routing: the agent assesses complexity before tools or implementation and may switch to a validated model from that provider's discovered catalog with a compact handoff. This supports complex work on Astra and simpler work on Sol or another suitable model without hardcoding model prices or treating catalog order as a price ranking. Quota availability is known per provider, not independently for every model. Model switches remain capped at three per owner message.
+
+Provider assignment does not bypass scheduler slots, role staffing, budgets, dependency readiness, or managed-baseline integration. For example, a task waiting for approved contract changes to reach its baseline still waits even when Codex has room.
 
 Plain chats are the owner's own use. The coordinator never holds or pauses them.
 
