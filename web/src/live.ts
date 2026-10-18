@@ -76,6 +76,7 @@ export function useLiveUpdates(qc: QueryClient): Connection {
           break;
         }
         case "task_updated":
+          void qc.invalidateQueries({ queryKey: keys.compute });
           qc.setQueryData<TaskDetail>(keys.task(push.task.id), (old) => (old ? { ...old, task: push.task } : old));
           void qc.invalidateQueries({ queryKey: keys.tasks(push.task.projectId) });
           void qc.invalidateQueries({ queryKey: keys.studio(push.task.projectId) });
@@ -95,6 +96,7 @@ export function useLiveUpdates(qc: QueryClient): Connection {
           void qc.invalidateQueries({ queryKey: keys.feedback(push.projectId) });
           break;
         case "task_deleted":
+          void qc.invalidateQueries({ queryKey: keys.compute });
           qc.removeQueries({ queryKey: keys.task(push.taskId) });
           void qc.invalidateQueries({ queryKey: keys.tasks(push.projectId) });
           break;
@@ -102,6 +104,7 @@ export function useLiveUpdates(qc: QueryClient): Connection {
           void qc.invalidateQueries({ queryKey: keys.coordinator });
           break;
         case "projects_changed":
+          void qc.invalidateQueries({ queryKey: keys.compute });
           void qc.invalidateQueries({ queryKey: keys.projects });
           void qc.invalidateQueries({ queryKey: ["project"] });
           break;

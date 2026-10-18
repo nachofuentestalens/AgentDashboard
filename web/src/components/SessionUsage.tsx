@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { api, keys } from "../api.ts";
+import { ModelActivity } from "./ModelActivity.tsx";
 
 function resetHint(resetsAt: string | null | undefined): string {
   if (!resetsAt) return "Reset time unknown";
@@ -12,6 +13,7 @@ function resetHint(resetsAt: string | null | undefined): string {
 
 export function SessionUsage() {
   const view = useQuery({ queryKey: keys.coordinator, queryFn: api.coordinator, refetchInterval: 30_000 });
+  const compute = useQuery({ queryKey: keys.compute, queryFn: api.compute, refetchInterval: 15_000 });
 
   return (
     <section aria-label="Session usage" className="shrink-0 space-y-1 border-t border-ink-800 p-3">
@@ -33,25 +35,33 @@ export function SessionUsage() {
                 : "text-emerald-300";
 
         return (
-          <Link
-            key={provider}
-            to="/coordinator"
-            aria-label={`${label} session: ${value}`}
-            aria-describedby={`session-reset-${provider}`}
-            className="group relative flex items-center justify-between rounded-md px-1 py-1 text-xs text-ink-200 hover:bg-ink-800 focus-visible:outline focus-visible:outline-gold"
-          >
-            <span>{label}</span>
-            <span className={`font-medium tabular-nums ${color}`}>{value}</span>
-            <span
-              id={`session-reset-${provider}`}
-              role="tooltip"
-              className="pointer-events-none absolute bottom-full left-0 z-50 mb-1 hidden w-52 rounded-md border border-ink-700 bg-ink-900 px-2 py-1.5 text-xs font-normal text-ink-200 shadow-lg group-hover:block group-focus-visible:block"
+          <div key={provider}>
+            <Link
+              to="/coordinator"
+              aria-label={`${label} session: ${value}`}
+              aria-describedby={`session-reset-${provider}`}
+              className="group relative flex items-center justify-between rounded-md px-1 py-1 text-xs text-ink-200 hover:bg-ink-800 focus-visible:outline focus-visible:outline-gold"
             >
-              {hint}
-              {resetHint(session?.resetsAt)}
-              {session?.source === "estimate" ? ". Usage is estimated." : session?.source === "reset" ? ". Reset since the last reading." : ""}
-            </span>
-          </Link>
+              <span>{label}</span>
+              <span className={`font-medium tabular-nums ${color}`}>{value}</span>
+              <span
+                id={`session-reset-${provider}`}
+                role="tooltip"
+                className="pointer-events-none absolute bottom-full left-0 z-50 mb-1 hidden w-52 rounded-md border border-ink-700 bg-ink-900 px-2 py-1.5 text-xs font-normal text-ink-200 shadow-lg group-hover:block group-focus-visible:block"
+              >
+                {hint}
+                {resetHint(session?.resetsAt)}
+                {session?.source === "estimate" ? ". Usage is estimated." : session?.source === "reset" ? ". Reset since the last reading." : ""}
+              </span>
+            </Link>
+            <ModelActivity
+              label={label}
+              active={compute.data?.active.filter((row) => row.run.provider === provider) ?? []}
+              queued={compute.data?.queued.filter((row) => row.run.provider === provider) ?? []}
+              pending={compute.isPending}
+              error={compute.isError}
+            />
+          </div>
         );
       })}
     </section>

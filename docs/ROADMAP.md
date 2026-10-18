@@ -100,6 +100,8 @@ Demo checklist (real Claude Code, on Windows):
 
 ## Project coordinator
 
+- [x] Sidebar provider activity counts with collapsible project groups, model/task links and hover details beside session remaining
+
 - [x] Owner-requested server restart with queue hold, agent handoffs, verified checkpoints, and persistent sessions; [restart flow](SERVER_RESTART.md)
 
 - [x] Coordinator tab: per-provider session and weekly usage from CLI rate-limit reports, owner readings, limit failures and optional token caps
