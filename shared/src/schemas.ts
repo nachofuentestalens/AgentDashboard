@@ -138,13 +138,16 @@ export const answerBody = z.object({
   record: z.boolean().optional(),
 });
 
+const runLimit = z.number().int().min(1).max(32);
+
 export const updateSettingsBody = z.object({
   claudePath: z.string().trim().max(400).optional(),
   codexPath: z.string().trim().max(400).optional(),
   defaultProvider: provider.optional(),
   defaultModel: defaultModel.optional(),
   defaultEffort: effort.optional(),
-  maxConcurrentRuns: z.number().int().min(1).max(32).optional(),
+  // Per provider; a provider left out keeps its limit.
+  maxConcurrentRuns: z.object({ claude: runLimit.optional(), codex: runLimit.optional() }).strict().optional(),
   dailyBudgetUsd: money.nullable().optional(),
   defaultTokenBudget: tokenBudget.optional(),
   defaultToolBudget: toolBudget.optional(),

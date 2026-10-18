@@ -364,8 +364,8 @@ export interface Settings {
   defaultProvider: Provider;
   defaultModel: string;
   defaultEffort: Effort;
-  // Agents that may run at once across all projects. Plain chats always start, but count.
-  maxConcurrentRuns: number;
+  // Agents of each provider that may run at once across all projects. Plain chats always start, but count.
+  maxConcurrentRuns: ProviderLimits;
   // Spend over the last 24 hours after which role tasks wait. Null: no limit.
   dailyBudgetUsd: number | null;
   // Allowances new tasks start with (tasks keep their own copy). Null: unlimited.
@@ -374,6 +374,7 @@ export interface Settings {
 }
 
 export const DEFAULT_MAX_CONCURRENT_RUNS = 1;
+export type ProviderLimits = Record<Provider, number>;
 export const DEFAULT_TASK_TOKEN_BUDGET: number | null = null;
 export const DEFAULT_TASK_TOOL_BUDGET: number | null = null;
 
@@ -579,6 +580,8 @@ export interface ComputeRun {
   departmentName: string | null;
   priority: number;
   emergency: boolean;
+  // The provider it runs (or would run) on, which decides the slot it takes.
+  provider: Provider;
 }
 
 export interface ComputeDepartment {
@@ -594,7 +597,7 @@ export interface ComputeDepartment {
 }
 
 export interface Compute {
-  maxConcurrentRuns: number;
+  maxConcurrentRuns: ProviderLimits;
   dailyBudgetUsd: number | null;
   spend24h: number;
   active: ComputeRun[];

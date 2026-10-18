@@ -1,4 +1,4 @@
-import type { Effort, Provider } from "@ad/shared";
+import { DEFAULT_PROVIDER, PROVIDERS, type Effort, type Provider, type ProviderLimits } from "@ad/shared";
 
 // Deciding which queued runs start is a pure function of this snapshot, so the rules can be tested
 // as a table. The runner builds the snapshot from the database and its live processes.
@@ -16,7 +16,7 @@ export interface QueuedRun {
   queuedAt: string;
   // What the run is expected to cost, to charge its department as it starts.
   estimateUsd: number;
-  // The provider it would run on, for the coordinator's holds.
+  // The provider it would run on, for its slot and the coordinator's holds.
   provider?: Provider;
   dependencyBlocker?: string | null;
 }
@@ -31,6 +31,7 @@ export interface ActiveRun {
   runId: string;
   departmentId: string | null;
   canEdit: boolean;
+  provider?: Provider;
 }
 
 export interface DepartmentState {
@@ -42,7 +43,8 @@ export interface DepartmentState {
 }
 
 export interface SchedulerState {
-  maxConcurrent: number;
+  // Slots per provider: one Claude agent and one Codex agent can run side by side.
+  maxConcurrent: ProviderLimits;
   budgetUsd: number | null;
   spendUsd: number;
   departments: Map<string, DepartmentState>;
@@ -86,7 +88,8 @@ export function plan(input: SchedulerState): Plan {
   const freeAgents = new Map([...input.freeAgents].map(([role, agents]) => [role, [...agents]]));
   const spend = new Map([...input.departments].map(([id, d]) => [id, d.spendUsd]));
   const writers = new Set(input.active.filter((a) => a.canEdit && a.departmentId).map((a) => a.departmentId!));
-  let running = input.active.length;
+  const running = new Map<Provider, number>(PROVIDERS.map((p) => [p.id, 0]));
+  for (const a of input.active) running.set(a.provider ?? DEFAULT_PROVIDER, (running.get(a.provider ?? DEFAULT_PROVIDER) ?? 0) + 1);
   let globalSpend = input.spendUsd;
   const start: Plan["start"] = [];
   let queue = [...input.queued].sort(byPriority);
@@ -109,7 +112,10 @@ export function plan(input: SchedulerState): Plan {
       return `The daily budget is reached (${money(globalSpend)} of ${money(input.budgetUsd)}).`;
     const hold = q.provider ? input.providerHolds?.get(q.provider) : undefined;
     if (!q.forced && hold && (hold.minPriority === null || q.priority < hold.minPriority)) return hold.reason;
-    if (running >= input.maxConcurrent) return `Waiting for a free slot (${running} of ${input.maxConcurrent} agents running).`;
+    const provider = q.provider ?? DEFAULT_PROVIDER;
+    const busy = running.get(provider) ?? 0;
+    const max = input.maxConcurrent[provider];
+    if (busy >= max) return `Waiting for a free ${PROVIDERS.find((p) => p.id === provider)!.label} slot (${busy} of ${max} running).`;
     return null;
   };
 
@@ -130,7 +136,7 @@ export function plan(input: SchedulerState): Plan {
         });
     const agentId = freeAgents.get(next.roleId)!.shift()!;
     start.push({ runId: next.runId, agentId });
-    running++;
+    running.set(next.provider ?? DEFAULT_PROVIDER, (running.get(next.provider ?? DEFAULT_PROVIDER) ?? 0) + 1);
     if (next.canEdit) writers.add(next.departmentId);
     spend.set(next.departmentId, (spend.get(next.departmentId) ?? 0) + next.estimateUsd);
     globalSpend += next.estimateUsd;

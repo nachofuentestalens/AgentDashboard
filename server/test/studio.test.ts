@@ -130,7 +130,7 @@ describe("role tasks", () => {
 
   it("runs one writing agent per department at a time", async () => {
     const app = await start();
-    await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: 3 });
+    await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: { claude: 3 } });
     const { projectId, role } = await studioProject(app);
     const prog = role("Gameplay Programmer");
     await api(app, "POST", `/api/roles/${prog.id}/agents`, {});
@@ -150,7 +150,7 @@ describe("role tasks", () => {
   it("starts higher priorities first when slots are scarce", async () => {
     const app = await start();
     const { projectId, role } = await studioProject(app);
-    await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: 1 });
+    await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: { claude: 1 } });
     const chat = await newTask(app, projectId, { message: "[slow]" });
     const qa = role("QA Tester");
     await api(app, "POST", `/api/roles/${qa.id}/agents`, {});
@@ -158,7 +158,7 @@ describe("role tasks", () => {
     const tasks: Task[] = [];
     for (const p of [2, 9, 5]) tasks.push(await roleTask(app, projectId, qa, `priority ${p} [slow]`, { priority: p, canEdit: false }));
     await waitFor(() => tasks.every((t) => latestRun(app, t.id).waitReason));
-    expect(latestRun(app, tasks[0]!.id).waitReason).toMatch(/Waiting for a free slot \(1 of 1/);
+    expect(latestRun(app, tasks[0]!.id).waitReason).toMatch(/Waiting for a free Claude slot \(1 of 1/);
 
     await api(app, "POST", `/api/runs/${latestRun(app, chat.id).id}/stop`);
     await taskReaches(app, tasks[1]!.id, ["running"]);
@@ -173,7 +173,7 @@ describe("role tasks", () => {
   it("starts emergencies past full slots and pauses the project's other work until they are done", async () => {
     const app = await start();
     const { projectId, role } = await studioProject(app);
-    await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: 1 });
+    await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: { claude: 1 } });
     const chat = await newTask(app, projectId, { message: "[slow]" });
     const waiting = await roleTask(app, projectId, role("QA Tester"), "routine check", { priority: 10 });
     await waitFor(() => !!latestRun(app, waiting.id).waitReason);
@@ -225,7 +225,7 @@ describe("role tasks", () => {
     const dataDir = tempDir("ad-data-");
     const first = await start(dataDir);
     const { projectId, role } = await studioProject(first);
-    await api(first, "PATCH", "/api/settings", { maxConcurrentRuns: 1 });
+    await api(first, "PATCH", "/api/settings", { maxConcurrentRuns: { claude: 1 } });
     const chat = await newTask(first, projectId, { message: "[slow]" });
     const queued = await roleTask(first, projectId, role("QA Tester"), "after the restart");
     await waitFor(() => !!latestRun(first, queued.id).waitReason);
@@ -385,7 +385,7 @@ describe("plain chats", () => {
   it("still start at once and never become emergencies", async () => {
     const app = await start();
     const projectId = await newProject(app);
-    await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: 1 });
+    await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: { claude: 1 } });
     const a = await newTask(app, projectId, { message: "[slow]", emergency: true });
     const b = await newTask(app, projectId, { message: "hello" });
     expect(a).toMatchObject({ status: "running", emergency: false, roleId: null });

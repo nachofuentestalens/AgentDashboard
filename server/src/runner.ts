@@ -72,6 +72,7 @@ interface ActiveRun {
   agentId: string | null;
   departmentId: string | null;
   canEdit: boolean;
+  provider: Provider;
   checkpointReason?: string;
   // Expected cost, charged to the department while the run goes (see the scheduler).
   estimateUsd: number;
@@ -203,8 +204,15 @@ export class Runner {
     return transition.error ? {} : { stage: transition.stage };
   }
 
-  activeRuns(): { runId: string; taskId: string; agentId: string | null; departmentId: string | null; canEdit: boolean }[] {
-    return [...this.active.values()].map(({ runId, taskId, agentId, departmentId, canEdit }) => ({ runId, taskId, agentId, departmentId, canEdit }));
+  activeRuns(): { runId: string; taskId: string; agentId: string | null; departmentId: string | null; canEdit: boolean; provider: Provider }[] {
+    return [...this.active.values()].map(({ runId, taskId, agentId, departmentId, canEdit, provider }) => ({
+      runId,
+      taskId,
+      agentId,
+      departmentId,
+      canEdit,
+      provider,
+    }));
   }
 
   eventsFile(runId: string): string {
@@ -595,42 +603,58 @@ export class Runner {
     this.bus.publish({ type: "run_event", runId: run.id, taskId, stamped });
   }
 
-  // Projects that opt in: a staffed role with nothing queued or running first resumes a step its
-  // agent left partial (within the project's automatic continuation limit), else starts its top
-  // backlog task, as the owner's Start would.
+  // Projects that opt in: staffed roles first resume steps their agents left partial (within the
+  // project's automatic continuation limit), then start their top backlog tasks, as the owner's
+  // Start would. Each needs a free agent of its role, a free slot for its provider and (for editing
+  // work) no other writer in its department. Every pass re-reads the limits, so raising one starts
+  // more work.
   private startIdleBacklog(): void {
     const projects = this.store.listProjects().filter((p) => p.startNextWhenIdle);
     if (projects.length === 0) return;
-    const busy = new Set([...this.store.runsWithStatus("queued"), ...this.store.runsWithStatus("running")].map((r) => r.roleId));
-    const staffed = new Set(
-      this.store
-        .listAgents()
-        .filter((a) => !a.paused)
-        .map((a) => a.roleId),
-    );
+    const limits = this.store.getSettings().maxConcurrentRuns;
+    const roleLoad = new Map<string, number>();
+    const providerLoad = new Map<Provider, number>();
+    const writers = new Set<string>();
+    const add = <K>(m: Map<K, number>, k: K) => m.set(k, (m.get(k) ?? 0) + 1);
+    for (const run of [...this.store.runsWithStatus("queued"), ...this.store.runsWithStatus("running")]) {
+      add(providerLoad, run.status === "running" ? run.provider : this.runProvider(run));
+      if (!run.roleId) continue;
+      add(roleLoad, run.roleId);
+      const role = this.store.getRole(run.roleId);
+      if (run.purpose === "work" && role?.canEdit && this.store.getTask(run.taskId)?.canEdit) writers.add(role.departmentId);
+    }
+    const agents = new Map<string, number>();
+    for (const a of this.store.listAgents()) if (!a.paused) add(agents, a.roleId);
+
+    // Runs the start when the task fits, and counts it against the role, provider and writer slot.
+    const tryStart = (task: Task, begin: () => void) => {
+      if (!task.roleId || (roleLoad.get(task.roleId) ?? 0) >= (agents.get(task.roleId) ?? 0) || this.store.dependencyBlocker(task)) return;
+      const provider = this.taskProvider(task);
+      if ((providerLoad.get(provider) ?? 0) >= limits[provider]) return;
+      const role = this.store.getRole(task.roleId);
+      const edits = !!role?.canEdit && task.canEdit;
+      if (edits && writers.has(role!.departmentId)) return;
+      try {
+        begin();
+        add(roleLoad, task.roleId);
+        add(providerLoad, provider);
+        if (edits) writers.add(role!.departmentId);
+      } catch {
+        // A budget or a removed role holds it; the owner sees the task where it was.
+      }
+    };
+
     for (const project of projects) {
       if (this.isProjectBusy(project.id) || this.deliveryPending.has(project.id) || this.store.deliveryPaused(project.id)) continue;
       for (const task of this.store.stalledTasks(project.id)) {
-        if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId) || task.autoContinues >= project.autoContinueSteps) continue;
-        if (this.budgetReason(task) || this.store.dependencyBlocker(task)) continue;
-        busy.add(task.roleId);
-        try {
+        if (task.autoContinues >= project.autoContinueSteps || this.budgetReason(task)) continue;
+        tryStart(task, () => {
           this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
           this.note(task.id, "info", `Resuming the unfinished step automatically (${task.autoContinues + 1} of ${project.autoContinueSteps}).`);
           this.send(task.id, task.nextStep ? `Continue the unfinished step: ${task.nextStep}` : "Continue the unfinished step.", true);
-        } catch {
-          // A budget or a removed role holds it; the task stays in progress for the owner.
-        }
+        });
       }
-      for (const task of this.store.backlogTasks(project.id)) {
-        if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId) || this.store.dependencyBlocker(task)) continue;
-        busy.add(task.roleId);
-        try {
-          this.stageAction(task.id, { action: "start" });
-        } catch {
-          // A budget or a removed role holds it; the owner sees the task still in the backlog.
-        }
-      }
+      for (const task of this.store.backlogTasks(project.id)) tryStart(task, () => this.stageAction(task.id, { action: "start" }));
     }
   }
 
@@ -969,7 +993,7 @@ export class Runner {
       freeAgents,
       staffedRoles,
       frozenProjects: new Set(this.store.openEmergencies().map((t) => t.projectId)),
-      active: [...this.active.values()].map((a) => ({ runId: a.runId, departmentId: a.departmentId, canEdit: a.canEdit })),
+      active: [...this.active.values()].map((a) => ({ runId: a.runId, departmentId: a.departmentId, canEdit: a.canEdit, provider: a.provider })),
       queued,
       providerHolds: holds,
     };
@@ -1090,6 +1114,7 @@ export class Runner {
       agentId,
       departmentId: role?.departmentId ?? null,
       canEdit,
+      provider,
       estimateUsd: costs?.[effort]?.avgUsd ?? EFFORT_COST_GUESS[effort],
     };
     this.active.set(run.id, active);
