@@ -654,7 +654,7 @@ export interface CoordinatorConfig {
   conservePriority: number;
   pauseRunning: boolean;
   resumePaused: boolean;
-  // Start backlog work when a session window would otherwise reset unused.
+  // Start backlog work with spare usage and route automated project work by provider headroom/load.
   fillIdle: boolean;
   // Move held work to the other provider when that one has room.
   switchProvider: boolean;

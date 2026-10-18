@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { Task } from "@ad/shared";
+import { DEFAULT_COORDINATOR_CONFIG, type Task } from "@ad/shared";
 import type { App } from "../src/app.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -265,5 +265,27 @@ describe("task stages", () => {
     expect(closed).toMatchObject({ status: "idle", stage: "closed" });
     expect(app.store.listTaskReviews(task.id).map((r) => r.verdict)).toEqual(["approved"]);
     expect((await api<Task>(app, "PATCH", `/api/tasks/${task.id}`, { done: false })).body.stage).toBe("backlog");
+  });
+
+  it("routes start-next work to available Codex and runs its complexity model review", async () => {
+    const { app, projectId, qa } = await roleProject();
+    for (const provider of ["claude", "codex"]) {
+      await api(app, "POST", "/api/coordinator/readings", {
+        provider,
+        window: "session",
+        usedPercent: provider === "claude" ? 50 : 1,
+        resetsAt: new Date(Date.now() + 5 * 3_600_000).toISOString(),
+      });
+    }
+    await api(app, "PUT", "/api/coordinator/config", { ...DEFAULT_COORDINATOR_CONFIG, mode: "auto", fillIdle: true });
+    // Change the project directly so the next scheduling pass observes both task and policy together.
+    app.store.updateProject(projectId, { startNextWhenIdle: true });
+    const task = await newTask(app, projectId, { roleId: qa.id, title: "Small check [switch-model]" });
+    app.runner.tick();
+    await waitFor(() => app.store.listRuns(task.id).length === 2 && app.store.listRuns(task.id).at(-1)?.status === "succeeded");
+    const runs = app.store.listRuns(task.id);
+    expect(runs.map((r) => r.provider)).toEqual(["codex", "codex"]);
+    expect(runs[1]).toMatchObject({ model: "demo-model-2", effort: "low" });
+    expect(app.store.getTask(task.id)!.stage).toBe("needs_review");
   });
 });

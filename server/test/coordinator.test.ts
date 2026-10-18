@@ -158,16 +158,61 @@ describe("decisions", () => {
     expect(types(input({ queued, providers: held, config: config({ mode: "auto", switchProvider: true }) }))).toEqual([]);
   });
 
-  it("starts backlog work only when a session would reset with room unused", () => {
+  it("starts backlog work with spare capacity even far from reset or after reset", () => {
     const backlog = [ref("top", 8), ref("other", 4, "codex")];
     const fill = config({ mode: "auto", fillIdle: true });
     expect(types(input({ backlog, config: fill, providers: new Map([["claude", state("ok", 30, HOUR)]]) }))).toEqual(["start:top"]);
-    // Far from the reset, or too little room above the reserve.
-    expect(types(input({ backlog, config: fill, providers: new Map([["claude", state("ok", 30, 4 * HOUR)]]) }))).toEqual([]);
+    expect(types(input({ backlog, config: fill, providers: new Map([["claude", state("ok", 30, 4 * HOUR)]]) }))).toEqual(["start:top"]);
+    const reset = state("ok", 0);
+    reset.session.resetsAt = null;
+    expect(types(input({ backlog, config: fill, providers: new Map([["claude", reset]]) }))).toEqual(["start:top"]);
+    // Too little room above the reserve.
     expect(types(input({ backlog, config: fill, providers: new Map([["claude", state("ok", 60, HOUR)]]) }))).toEqual([]);
     // Work already waiting for the provider uses the room first.
     const queued = [{ ...ref("q"), runId: "r1", emergency: false, forced: false, work: true }];
     expect(types(input({ backlog, queued, config: fill, providers: new Map([["claude", state("ok", 30, HOUR)]]) }))).toEqual([]);
+  });
+
+  it("routes automated queued work to spare Codex capacity without a held source", () => {
+    const q = { ...ref("q"), automatic: true, runId: "r1", emergency: false, forced: false, work: true };
+    const providers = new Map<"claude" | "codex", ProviderState>([
+      ["claude", { ...state("ok", 52), running: 1, queued: 1 }],
+      ["codex", { ...state("ok", 1, 5 * HOUR), running: 1, queued: 0 }],
+    ]);
+    const snapshot = input({ queued: [q], providers, config: config({ mode: "auto", fillIdle: true, switchProvider: false }) });
+    expect(types(snapshot)).toEqual(["switch:q>codex"]);
+    expect(types({ ...snapshot, config: config({ mode: "off", fillIdle: true }) })).toEqual([]);
+    for (const over of [{ automatic: false }, { work: false }, { forced: true }, { emergency: true }])
+      expect(types({ ...snapshot, queued: [{ ...q, ...over }] })).toEqual([]);
+    for (const level of ["unknown", "conserve", "reserve", "exhausted"] as const) {
+      providers.set("codex", state(level, 1));
+      expect(types(snapshot)).toEqual([]);
+    }
+    providers.set("codex", { ...state("ok", 1), running: 10 });
+    expect(types(snapshot)).toEqual([]);
+  });
+
+  it("keeps a reassigned queue stable and accounts for planned assignments", () => {
+    const queued = ["a", "b"].map((id) => ({ ...ref(id), automatic: true, runId: id, emergency: false, forced: false, work: true }));
+    const providers = new Map<"claude" | "codex", ProviderState>([
+      ["claude", state("ok", 30)],
+      ["codex", state("ok", 30)],
+    ]);
+    const snapshot = input({ queued, providers, config: config({ fillIdle: true }) });
+    expect(types(snapshot)).toEqual(["switch:a>codex"]);
+    expect(types({ ...snapshot, queued: [{ ...queued[0]!, provider: "codex" }, queued[1]!] })).toEqual([]);
+  });
+
+  it("can start an automatic backlog task on another provider only once", () => {
+    const providers = new Map<"claude" | "codex", ProviderState>([
+      ["claude", state("reserve")],
+      ["codex", state("ok", 1)],
+    ]);
+    const snapshot = input({ backlog: [{ ...ref("a"), automatic: true }], providers, config: config({ fillIdle: true }) });
+    expect(types(snapshot)).toEqual(["start:a>codex"]);
+    expect(types({ ...snapshot, backlog: [ref("manual")] })).toEqual([]);
+    providers.set("claude", state("ok"));
+    expect(decide(snapshot)).toHaveLength(1);
   });
 
   it("decides nothing when off", () => {

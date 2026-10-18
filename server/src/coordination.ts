@@ -201,6 +201,7 @@ export class Coordinator implements RunCoordinator {
         emergency: t.task.emergency,
         forced: run.forced,
         work: run.purpose === "work",
+        automatic: !!t.task.roleId && !!this.store.getProject(t.task.projectId)?.startNextWhenIdle,
       });
     }
     // A paused task the owner resumed, restarted or deleted is no longer the coordinator's.
@@ -238,7 +239,13 @@ export class Coordinator implements RunCoordinator {
           !this.runner.isProjectBusy(t.projectId),
       )
       .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt))
-      .map((t) => ({ taskId: t.id, title: t.title, provider: this.runner.taskProvider(t), priority: t.priority }));
+      .map((t) => ({
+        taskId: t.id,
+        title: t.title,
+        provider: this.runner.taskProvider(t),
+        priority: t.priority,
+        automatic: !!this.store.getProject(t.projectId)?.startNextWhenIdle,
+      }));
     const states = new Map<Provider, ProviderState>(providers.map((p) => [p.provider, p]));
     return { now, config, providers: states, running, queued, paused, backlog };
   }
@@ -302,6 +309,10 @@ export class Coordinator implements RunCoordinator {
           break;
         }
         case "start":
+          if (action.to) {
+            const task = this.store.updateTask(action.taskId, { provider: action.to, model: null, effort: null });
+            if (task) this.bus.publish({ type: "task_updated", task });
+          }
           this.runner.stageAction(action.taskId, { action: "start" });
           break;
         case "switch": {
