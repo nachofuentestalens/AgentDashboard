@@ -27,6 +27,11 @@ export function attentionItems(inbox: Inbox): AttentionItem[] {
     })),
     ...inbox.proposals.map((p) => ({ key: `proposal:${p.id}`, text: `Design proposal for ${p.docPath}`, url: "/inbox" })),
     ...inbox.handoffs.map((h) => ({ key: `handoff:${h.id}`, text: `Task request: "${h.title}" for ${h.toRoleName}`, url: "/inbox" })),
+    ...inbox.blocked.map((h) => ({
+      key: `blocked:${h.run.id}:${h.run.waitReason ?? ""}`,
+      text: `"${h.task.title}" is blocked: ${h.run.waitReason}`,
+      url: "/inbox",
+    })),
     ...inbox.held.map((h) => ({ key: `held:${h.run.id}`, text: `"${h.task.title}" is held: ${h.run.waitReason ?? "waiting"}`, url: "/inbox" })),
   ];
 }

@@ -71,6 +71,10 @@ const money = (n: number) => `$${n.toFixed(2)}`;
 
 // Held runs wait on a rule the owner can override with "run anyway" (a budget, an emergency),
 // unlike a busy agent or a full slot, which clear up by themselves.
+// Baseline waits the owner must resolve (integrate, repair a worktree, enable delivery), unlike the
+// short waits while a delivery operation or other agents finish.
+export const isBlockedReason = (reason: string) => /^Baseline:/.test(reason) && !/a delivery operation is running|waiting for running agents/.test(reason);
+
 export const isHeldReason = (reason: string) => /daily budget|emergency task|^Coordinator:/.test(reason);
 
 // Queue order inside a department, and among emergencies: higher priority first, then older.

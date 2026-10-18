@@ -125,6 +125,8 @@ export class Runner {
   private readonly deliveryPending = new Set<string>();
   // taskId:checkpoint pairs whose automatic delivery failed; the owner takes over until the checkpoint changes.
   private readonly deliveryFailed = new Set<string>();
+  // taskId:checkpoint:baseline → whether the checkpoint is an ancestor of that baseline.
+  private readonly integratedCache = new Map<string, boolean>();
   private tickPending = false;
   private tickAgain = false;
   private closed = false;
@@ -538,6 +540,7 @@ export class Runner {
           !this.deliveryFailed.has(key(t)) &&
           this.passedOnCheckpoint(t),
       );
+      ready.push(...(await this.approvedOutsideBaseline(project.id, tasks)).filter((t) => !this.deliveryFailed.has(key(t))));
       if (ready.length === 0) continue;
       this.deliveryPending.add(project.id);
       if (tasks.some((t) => this.isTaskRunning(t.id))) continue;
@@ -554,6 +557,28 @@ export class Runner {
       }
       this.deliveryPending.delete(project.id);
     }
+  }
+
+  // A plain approval satisfies the dependency graph but leaves the checkpoint outside the baseline,
+  // so successors would wait on readiness forever. Integrate those an open task still needs.
+  private async approvedOutsideBaseline<T extends Task>(projectId: string, tasks: T[]): Promise<T[]> {
+    const baseline = this.store.projectBaseline(projectId);
+    if (!baseline) return [];
+    const needed = new Set(tasks.filter((t) => t.stage !== "approved" && t.stage !== "closed").flatMap((t) => t.dependencyIds));
+    const missing: T[] = [];
+    for (const task of tasks) {
+      const w = this.store.getWorkspace(task.id);
+      if (!needed.has(task.id) || task.stage !== "approved" || task.status !== "idle" || !w?.checkpointCommit || w.error) continue;
+      if (w.approvedCommit !== w.checkpointCommit || !this.store.taskApproved(task)) continue;
+      const key = `${task.id}:${w.checkpointCommit}:${baseline.commit}`;
+      let present = this.integratedCache.get(key);
+      if (present === undefined) {
+        present = (await git(baseline.repoPath, ["merge-base", "--is-ancestor", w.checkpointCommit, baseline.commit])).ok;
+        this.integratedCache.set(key, present);
+      }
+      if (!present) missing.push(task);
+    }
+    return missing;
   }
 
   // A notice after the fact goes on the task's latest finished run, so it shows in the transcript.

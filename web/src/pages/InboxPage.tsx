@@ -59,6 +59,13 @@ export function InboxPage() {
             ))}
           </Section>
         )}
+        {data && data.blocked.length > 0 && (
+          <Section title="Blocked on the baseline">
+            {data.blocked.map((h) => (
+              <BlockedCard key={h.run.id} h={h} />
+            ))}
+          </Section>
+        )}
         {data && data.held.length > 0 && (
           <Section title="Held by a budget or an emergency">
             {data.held.map((h) => (
@@ -225,6 +232,31 @@ function HandoffCard({ h }: { h: Handoff & { projectName: string } }) {
         </Button>
       </div>
       <ErrorNote error={approve.error ?? reject.error} />
+    </article>
+  );
+}
+
+function BlockedCard({ h }: { h: InboxRun }) {
+  const stop = useMutation({ mutationFn: () => api.stopRun(h.run.id) });
+  return (
+    <article className={card} aria-label={`Blocked: ${h.task.title}`}>
+      <div className="flex items-center gap-2">
+        <PriorityBadge priority={h.task.priority} emergency={h.task.emergency} />
+        <Link to={`/tasks/${h.task.id}`} className="text-sm font-medium text-ink-100 hover:underline">
+          {h.task.title}
+        </Link>
+        <span className="ml-auto text-xs text-ink-400">{h.projectName}</span>
+      </div>
+      <p className="text-xs text-gold">{h.run.waitReason}</p>
+      <div className="flex items-center gap-2">
+        <Link to={`/projects/${h.task.projectId}`} className="text-xs text-accent underline">
+          Open Delivery &amp; baseline
+        </Link>
+        <Button onClick={() => stop.mutate()} disabled={stop.isPending}>
+          Take out of the queue
+        </Button>
+      </div>
+      <ErrorNote error={stop.error} />
     </article>
   );
 }
