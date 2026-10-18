@@ -220,13 +220,14 @@ describe("task stages", () => {
     const first = await newTask(app, projectId, { roleId: qa.id, title: "First check", priority: 9, message: "work [review-pass]" });
     const second = await newTask(app, projectId, { roleId: qa.id, title: "Second check" });
     await api(app, "PATCH", `/api/projects/${projectId}`, { autoReview: true, startNextWhenIdle: true, autoApprove: true });
-    await waitFor(() => app.store.getTask(first.id)!.stage === "approved", 15_000);
+    // Work, review and baseline integration run back to back; Windows CI has taken over 15 s here.
+    await waitFor(() => app.store.getTask(first.id)!.stage === "approved", 40_000);
     expect(app.store.listRuns(first.id).map((r) => r.purpose)).toEqual(["work", "review"]);
     expect(app.store.listTaskReviews(first.id).map((r) => [r.reviewer === "owner" ? "owner" : "agent", r.verdict])).toEqual([
       ["agent", "pass"],
       ["owner", "approved"],
     ]);
-    await waitFor(() => app.store.listRuns(second.id).length > 0, 15_000);
+    await waitFor(() => app.store.listRuns(second.id).length > 0, 40_000);
   });
 
   it("sends review findings back a bounded number of times under hands-off delivery", async () => {
