@@ -20,7 +20,7 @@ import { readDocText, safeDocPath, saveDocs } from "./docs.ts";
 import { HttpError } from "./http.ts";
 import { DECISIONS_DOC } from "./folders.ts";
 import type { Notice, ReplyHandler, ReplyOutcome, Runner } from "./runner.ts";
-import { isHeldReason } from "./scheduler.ts";
+import { isBlockedReason, isHeldReason } from "./scheduler.ts";
 import type { Store } from "./store.ts";
 import { STUDIO_TEMPLATE } from "./template.ts";
 
@@ -339,19 +339,23 @@ export class Studio implements ReplyHandler {
     });
     const handoffs = this.store.pendingHandoffs().map((h) => ({ ...h, projectName: name(h.projectId) }));
     const questions = this.store.waitingTasks().map((task) => ({ task, projectName: name(task.projectId) }));
-    const held = this.store
-      .runsWithStatus("queued")
-      .filter((run) => !run.forced && run.waitReason && isHeldReason(run.waitReason))
-      .flatMap((run) => {
-        const task = this.store.getTask(run.taskId);
-        return task ? [{ run, task, projectName: name(task.projectId) }] : [];
-      });
+    const queued = (match: (reason: string) => boolean) =>
+      this.store
+        .runsWithStatus("queued")
+        .filter((run) => run.waitReason && match(run.waitReason))
+        .flatMap((run) => {
+          const task = this.store.getTask(run.taskId);
+          return task ? [{ run, task, projectName: name(task.projectId) }] : [];
+        });
+    const held = queued(isHeldReason).filter((h) => !h.run.forced);
+    // Run anyway cannot override a baseline wait, so forced runs still need the owner.
+    const blocked = queued(isBlockedReason);
     const inStage = (stage: "needs_review" | "changes_requested") =>
       this.store.tasksInStage(stage).map((task) => ({ task, projectName: name(task.projectId) }));
     const reviews = inStage("needs_review");
     const changes = inStage("changes_requested");
-    const count = proposals.length + handoffs.length + questions.length + reviews.length + changes.length + held.length;
-    return { proposals, handoffs, questions, reviews, changes, held, count };
+    const count = proposals.length + handoffs.length + questions.length + reviews.length + changes.length + held.length + blocked.length;
+    return { proposals, handoffs, questions, reviews, changes, held, blocked, count };
   }
 
   private pendingProposal(id: string): { proposal: Proposal; repo: string } {

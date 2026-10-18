@@ -1,4 +1,5 @@
 import type {
+  RestartStatus,
   BaselinePreview,
   DeliveryView,
   ProjectBaseline,
@@ -68,6 +69,10 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 type Saved = { commitError: string | null };
 
 export const api = {
+  restartStatus: () => request<RestartStatus>("GET", "/api/server/restart"),
+  requestRestart: () => request<RestartStatus>("POST", "/api/server/restart/request"),
+  cancelRestart: () => request<RestartStatus>("POST", "/api/server/restart/cancel"),
+  confirmRestart: () => request<{ restarting: boolean }>("POST", "/api/server/restart/confirm"),
   delivery: (id: string) => request<DeliveryView>("GET", `/api/projects/${id}/delivery`),
   previewDeliveryPlan: (id: string) => request<DeliveryPlanPreview>("POST", `/api/projects/${id}/delivery/plan`),
   approveDeliveryPlan: (id: string, previewId: string) => request<DeliveryPlanPreview>("POST", `/api/projects/${id}/delivery/plan/approve`, { previewId }),

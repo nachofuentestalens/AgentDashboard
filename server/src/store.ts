@@ -802,6 +802,17 @@ export class Store {
     return (rows as Row[]).map(toTask);
   }
 
+  // Role tasks whose agent stopped mid-step with nothing running or asked: no review or answer will move them.
+  stalledTasks(projectId: string): Task[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE project_id = ? AND stage = 'in_progress' AND role_id IS NOT NULL AND status = 'idle' AND step_state = 'partial'
+         ORDER BY emergency DESC, priority DESC, created_at`,
+      )
+      .all(projectId);
+    return (rows as Row[]).map(toTask);
+  }
+
   // Oldest first: the work that has waited longest for the owner comes up first.
   tasksInStage(stage: TaskStage): Task[] {
     const rows = this.db.prepare("SELECT * FROM tasks WHERE stage = ? AND status NOT IN ('running', 'queued') ORDER BY stage_changed_at").all(stage);

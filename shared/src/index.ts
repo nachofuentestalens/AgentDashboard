@@ -7,3 +7,4 @@ export * from "./transcript.ts";
 export * from "./blocks.ts";
 export * from "./diff.ts";
 export * from "./attention.ts";
+export * from "./restart.ts";

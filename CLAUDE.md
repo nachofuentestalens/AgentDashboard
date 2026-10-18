@@ -9,6 +9,7 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
   - `app.ts`: core routes, the loopback/origin guard, SSE `/api/events`, static web serving. `studio-routes.ts`: departments, roles, agents, docs, inbox, compute, feedback.
   - `store.ts`: **all SQL**. `db.ts`: `node:sqlite` connection and append-only migrations.
   - `runner.ts`: spawns `claude`, records events to `runs/<id>.jsonl`, settles run outcomes, stop/retry, one run per task. Plain chats start at once; role tasks are queued and started by a scheduling pass.
+  - `restart.ts`: durable server restart barrier, agent handoffs and checkpoint readiness; `scripts/server.mjs` relaunches on confirmed restart. See `docs/SERVER_RESTART.md`.
   - `stages.ts`: the pure function for role task stages (backlog → in_progress → needs_review → approved → closed, see `docs/TASK_STATES.md`). `runner.ts` applies it on run start/finish and owner actions (`POST /api/tasks/:id/actions`); change transitions here and in its table test. Plain chats have no stage. Review runs (`purpose: "review"`) run as the reviewer role, read-only, in their own session (`actorTask` in `runner.ts`); `step`, `plan` and `review` reply blocks report progress, never approval.
   - `scheduler.ts`: the pure function deciding which queued runs start (slots, budgets, one writer per department, fair share by weight, priority, emergencies). Change rules here and in its table test.
   - `readiness.ts`: committed input and prerequisite ancestry checks before scheduling/launch; dependency graph validation and approval state live in `store.ts`. See `docs/DEPENDENCIES.md` and the Banner & Bounty recovery audit before enabling automation on legacy task plans.
@@ -38,7 +39,8 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
 ## Testing
 
 - `pnpm test` (vitest): parser/transcript units and API tests in `server/test/` that drive the real runner with the fake agent. Add a scenario keyword to `fake-claude.mjs` when a test needs new agent behaviour.
-- `pnpm test:e2e` (Playwright): run after UI changes. With a preinstalled Chromium (a cloud container, or Chrome/Edge on Windows), set `PW_CHROMIUM` to its executable instead of installing browsers.
+- CI uses two Vitest workers explicitly: the default leaves only one on two-core runners, making Windows API suites the longest PR check. Keep file isolation and per-test fixtures; compare job and suite timings before raising concurrency further.
+- `pnpm test:e2e` (Playwright): run after UI changes. With a preinstalled Chromium (a cloud container, or Chrome/Edge on Windows), set `PW_CHROMIUM` to its executable instead of installing browsers. Set `E2E_PORT` when another worktree already runs the suite on the default 5199.
 - `pnpm validate` before reporting work as done. CI runs it on Windows and Linux.
 - Formatting: Prettier (`pnpm format`), print width 160.
 

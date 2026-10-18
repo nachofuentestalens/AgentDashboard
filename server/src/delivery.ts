@@ -5,6 +5,7 @@ import type { BaselinePreview, DeliveryView, DeliveryPlanPreview } from "@ad/sha
 import { requiredPaths } from "@ad/shared";
 import { checkedGit, gitIdentity, mergeCommit } from "./baseline.ts";
 import { git } from "./git.ts";
+import { checkpointTitle } from "./commit-summary.ts";
 import { HttpError } from "./http.ts";
 import type { Store } from "./store.ts";
 import type { Runner } from "./runner.ts";
@@ -139,7 +140,8 @@ export class Delivery {
       await this.runner.verifyWorkspaceSnapshot(taskId);
       const blocked = this.store.dependencyBlocker(task);
       if (blocked) throw new HttpError(blocked, 409);
-      const commit = await mergeCommit(project.repoPath, baseline.commit, w.checkpointCommit, `Integrate reviewed task: ${task.title}\n`);
+      const message = await checkedGit(w.path, ["show", "-s", "--format=%B", w.checkpointCommit]);
+      const commit = await mergeCommit(project.repoPath, baseline.commit, w.checkpointCommit, `${checkpointTitle(message)}\n`);
       return this.savePreview(projectId, "integration", baseline.commit, w.checkpointCommit, commit, taskId);
     });
   }

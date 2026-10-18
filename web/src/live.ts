@@ -60,8 +60,6 @@ export function useLiveUpdates(qc: QueryClient): Connection {
             return { ...old, runs: exists ? old.runs.map((r) => (r.id === run.id ? run : r)) : [...old.runs, run] };
           });
           if (run.status !== "running") {
-            // Desktop alerts (attention.ts) announce finished turns.
-            if (run.status !== "queued") window.dispatchEvent(new CustomEvent<Run>(RUN_FINISHED, { detail: run }));
             void qc.invalidateQueries({ queryKey: ["task"] });
             // The stored file now holds every event; the buffer is no longer needed.
             setTimeout(() => buffers.delete(run.id), 30_000);
@@ -75,7 +73,12 @@ export function useLiveUpdates(qc: QueryClient): Connection {
           void qc.invalidateQueries({ queryKey: keys.inbox });
           break;
         }
+        case "reply_ready":
+          // Desktop alerts (attention.ts) announce replies the owner has to read.
+          window.dispatchEvent(new CustomEvent<Run>(RUN_FINISHED, { detail: push.run }));
+          break;
         case "task_updated":
+          void qc.invalidateQueries({ queryKey: keys.compute });
           qc.setQueryData<TaskDetail>(keys.task(push.task.id), (old) => (old ? { ...old, task: push.task } : old));
           void qc.invalidateQueries({ queryKey: keys.tasks(push.task.projectId) });
           void qc.invalidateQueries({ queryKey: keys.studio(push.task.projectId) });
@@ -95,6 +98,7 @@ export function useLiveUpdates(qc: QueryClient): Connection {
           void qc.invalidateQueries({ queryKey: keys.feedback(push.projectId) });
           break;
         case "task_deleted":
+          void qc.invalidateQueries({ queryKey: keys.compute });
           qc.removeQueries({ queryKey: keys.task(push.taskId) });
           void qc.invalidateQueries({ queryKey: keys.tasks(push.projectId) });
           break;
@@ -102,6 +106,7 @@ export function useLiveUpdates(qc: QueryClient): Connection {
           void qc.invalidateQueries({ queryKey: keys.coordinator });
           break;
         case "projects_changed":
+          void qc.invalidateQueries({ queryKey: keys.compute });
           void qc.invalidateQueries({ queryKey: keys.projects });
           void qc.invalidateQueries({ queryKey: ["project"] });
           break;

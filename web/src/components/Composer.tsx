@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { useDraft } from "../drafts.ts";
 import { Button } from "./ui.tsx";
 
 // The message box. Ctrl/Cmd+Enter sends; plain Enter makes a new line, since briefs are long.
@@ -10,6 +11,7 @@ export function Composer({
   sendLabel = "Send",
   footer,
   autoFocus,
+  draftKey,
 }: {
   onSend: (text: string) => Promise<unknown> | void;
   disabled?: boolean;
@@ -18,8 +20,10 @@ export function Composer({
   sendLabel?: string;
   footer?: ReactNode;
   autoFocus?: boolean;
+  // Keeps unsent text across navigation, e.g. "task:<id>".
+  draftKey?: string;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(draftKey);
   const canSend = text.trim().length > 0 && !disabled && !busy;
 
   const send = async () => {

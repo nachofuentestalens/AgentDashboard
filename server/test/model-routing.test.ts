@@ -27,6 +27,17 @@ it.each(["claude", "codex"] as const)("%s reviews first and switches with a fres
   expect(app.runner.readEvents(runs[0]!.id).some((e) => e.event.kind === "notice" && e.event.text.includes("Switching to"))).toBe(true);
 });
 
+it("announces only the reply that no automatic switch carries on from", async () => {
+  app = await testApp();
+  const ready: string[] = [];
+  app.bus.subscribe((push) => {
+    if (push.type === "reply_ready") ready.push(push.run.id);
+  });
+  const task = await newTask(app, await newProject(app), { message: "Make a small edit [switch-model]" });
+  await waitFor(() => app!.store.listRuns(task.id).length === 2 && ready.length === 1);
+  expect(ready).toEqual([latestRun(app, task.id).id]);
+});
+
 it("rejects unavailable models and leaves the task's settings unchanged", async () => {
   app = await testApp();
   const task = await newTask(app, await newProject(app), { message: "Edit [switch-invalid]" });
@@ -57,6 +68,9 @@ it("does not automatically switch after the cumulative token checkpoint is reach
 
 it("validates the complete review and provider effort before applying it", () => {
   expect(parseModelReview('```model-review\n{"model":"x"}\n```')).toBeNull();
+  const labelled = '{"complexity":"complex","model":"m","effort":"high","reason":"r","action":"switch","nextStep":"n"}';
+  expect(parseModelReview(`model-review\n\`\`\`json\n${labelled}\n\`\`\``)?.action).toBe("switch");
+  expect(parseModelReview(`Some json:\n\`\`\`json\n${labelled}\n\`\`\``)).toBeNull();
   expect(
     validateModelReview({ complexity: "simple", model: null, effort: "max", reason: "test", action: "switch", nextStep: "implement" }, "codex", [], {
       provider: "codex",

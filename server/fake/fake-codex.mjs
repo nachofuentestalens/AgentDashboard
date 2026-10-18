@@ -5,6 +5,7 @@
 // [question], [badblock], [args], [sysprompt], [context], [history].
 
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import readline from "node:readline";
 
 const args = process.argv.slice(2);
@@ -104,6 +105,10 @@ if (prompt.includes("[sysprompt]")) await say(`Instructions: ${(blocksBefore.ins
 if (prompt.includes("[context]")) await say(`Context: ${(blocksBefore["studio-context"] ?? "").slice(0, 4000)}`);
 if (prompt.includes("[history]")) await say(`History: ${(blocksBefore["conversation-so-far"] ?? "none").slice(0, 4000)}`);
 if (prompt.includes("[cwd]")) await say(`Working directory: ${process.cwd()}`);
+if (prompt.includes("[write-workspace]")) {
+  fs.writeFileSync("agent-work.txt", "Unfinished agent work\n");
+  await say(`Workspace write: ${process.cwd()}`);
+}
 
 if (prompt.includes("[tool]")) {
   const id = `item_${n++}`;

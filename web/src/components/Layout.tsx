@@ -7,6 +7,7 @@ import { useLiveUpdates } from "../live.ts";
 import { NewProjectContext } from "../newProject.ts";
 import { NewProjectDialog } from "../pages/NewProjectDialog.tsx";
 import { SessionUsage } from "./SessionUsage.tsx";
+import { ServerRestart } from "./ServerRestart.tsx";
 
 export function Layout() {
   const qc = useQueryClient();
@@ -56,6 +57,7 @@ export function Layout() {
             {projects.data?.length === 0 && <p className="px-2 py-1 text-xs text-ink-400">No projects yet.</p>}
           </nav>
           <SessionUsage />
+          <ServerRestart />
           <div className="shrink-0 space-y-1 border-t border-ink-800 p-2">
             <NavLink to="/inbox" className={navClass}>
               Inbox

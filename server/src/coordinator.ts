@@ -19,8 +19,7 @@ const HOUR = 3_600_000;
 const WEEK = 7 * 24 * HOUR;
 // In a session's last half hour what is left resets unused anyway, so conserving stops (the reserve stays).
 export const LAST_CALL_MS = 30 * 60_000;
-// fillIdle starts backlog work only this close to a session reset, and only with this much room above the reserve.
-export const FILL_WINDOW_MS = 2 * HOUR;
+// Keep enough room for a useful work session above the owner's reserve.
 export const FILL_MIN_HEADROOM_PCT = 25;
 
 const label = (p: Provider) => PROVIDERS.find((x) => x.id === p)!.label;
@@ -146,6 +145,9 @@ export interface ProviderState {
   level: QuotaLevel;
   reason: string;
   session: QuotaWindowView;
+  // Include owner chats in load, even though automation never changes them.
+  running?: number;
+  queued?: number;
 }
 
 // What the scheduler holds back per provider. Only in auto mode: in advise mode the owner decides.
@@ -165,6 +167,8 @@ interface TaskRef {
   title: string;
   provider: Provider;
   priority: number;
+  // Work in a project with start-next automation enabled.
+  automatic?: boolean;
 }
 
 export interface CoordinatorInput {
@@ -208,30 +212,60 @@ export function decide(input: CoordinatorInput): CoordinatorAction[] {
   if (config.resumePaused)
     for (const p of input.paused) if (p.resumable && allows(p.provider, p.priority)) act("resume", p, p.runId, `${label(p.provider)} has room again.`);
 
-  if (config.switchProvider) {
+  const loads = new Map(
+    PROVIDERS.map(({ id }) => [
+      id,
+      (providers.get(id)?.running ?? input.running.filter((r) => r.provider === id).length) +
+        (providers.get(id)?.queued ?? input.queued.filter((q) => q.provider === id).length),
+    ]),
+  );
+  const room = (p: Provider) => Math.max(0, 100 - config.sessionReservePct - (providers.get(p)?.session.usedPercent ?? 100));
+  const score = (p: Provider) => (level(p) === "ok" ? room(p) / (1 + (loads.get(p) ?? 0)) : 0);
+  const bestProvider = (current: Provider) => PROVIDERS.reduce((best, { id }) => (score(id) > score(best) ? id : best), current);
+
+  if (config.switchProvider || config.fillIdle) {
     for (const q of input.queued) {
-      if (q.forced || q.emergency || !q.work || allows(q.provider, q.priority)) continue;
+      if (q.forced || q.emergency || !q.work) continue;
+      // Exclude this candidate from load so reevaluating the queue cannot bounce it back.
+      loads.set(q.provider, Math.max(0, (loads.get(q.provider) ?? 0) - 1));
+      const automatic = config.fillIdle && q.automatic;
       // Only to a provider known to have room, never into an unknown one.
-      const other = PROVIDERS.map((x) => x.id).find((p) => p !== q.provider && level(p) === "ok");
-      if (other) act("switch", q, q.runId, `${label(q.provider)} is held (${reason(q.provider)}); ${label(other)} has room.`, other);
+      const other = automatic
+        ? bestProvider(q.provider)
+        : config.switchProvider && !allows(q.provider, q.priority)
+          ? PROVIDERS.map((x) => x.id).find((p) => p !== q.provider && level(p) === "ok")
+          : undefined;
+      const target = other ?? q.provider;
+      loads.set(target, (loads.get(target) ?? 0) + 1);
+      if (target !== q.provider)
+        act(
+          "switch",
+          q,
+          q.runId,
+          automatic
+            ? `${label(target)} has more session headroom per assigned run. The agent reviews task complexity and selects a model before implementation.`
+            : `${label(q.provider)} is held (${reason(q.provider)}); ${label(target)} has room.`,
+          target,
+        );
     }
   }
 
   if (config.fillIdle) {
-    for (const [provider, s] of providers) {
-      if (s.level !== "ok" || !s.session.resetsAt || s.session.usedPercent === null) continue;
-      const left = Date.parse(s.session.resetsAt) - input.now;
-      const headroom = 100 - config.sessionReservePct - s.session.usedPercent;
-      if (left > FILL_WINDOW_MS || headroom < FILL_MIN_HEADROOM_PCT) continue;
-      if (input.queued.some((q) => q.provider === provider)) continue;
-      const next = input.backlog.find((t) => t.provider === provider);
-      if (next)
+    const selected = new Set<string>();
+    for (const [provider, s] of [...providers].sort(([a], [b]) => score(b) - score(a))) {
+      if (s.level !== "ok" || room(provider) < FILL_MIN_HEADROOM_PCT) continue;
+      if (input.queued.some((q) => (actions.find((a) => a.type === "switch" && a.runId === q.runId)?.to ?? q.provider) === provider)) continue;
+      const next = input.backlog.find((t) => !selected.has(t.taskId) && (t.provider === provider || t.automatic));
+      if (next) {
+        selected.add(next.taskId);
         act(
           "start",
           next,
           null,
-          `${round(headroom)}% of the ${label(provider)} session above your reserve resets unused in ${until(s.session.resetsAt, input.now)}.`,
+          `${label(provider)} has ${round(room(provider))}% session headroom above your reserve. The agent selects a model based on task complexity.`,
+          provider === next.provider ? null : provider,
         );
+      }
     }
   }
   return actions;

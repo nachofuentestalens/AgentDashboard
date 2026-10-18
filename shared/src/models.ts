@@ -565,6 +565,8 @@ export interface Inbox {
   changes: InboxQuestion[];
   // Queued runs held back by a budget or an emergency, which the owner can run anyway.
   held: InboxRun[];
+  // Queued runs whose prerequisites are not in their baseline: they wait until the owner integrates them.
+  blocked: InboxRun[];
   count: number;
 }
 
@@ -657,7 +659,7 @@ export interface CoordinatorConfig {
   conservePriority: number;
   pauseRunning: boolean;
   resumePaused: boolean;
-  // Start backlog work when a session window would otherwise reset unused.
+  // Start backlog work with spare usage and route automated project work by provider headroom/load.
   fillIdle: boolean;
   // Move held work to the other provider when that one has room.
   switchProvider: boolean;

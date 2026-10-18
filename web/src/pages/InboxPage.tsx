@@ -6,6 +6,7 @@ import { api, keys } from "../api.ts";
 import { Markdown } from "../components/Markdown.tsx";
 import { StageActions } from "../components/StageActions.tsx";
 import { Button, ErrorNote, inputClass, PriorityBadge, PrioritySelect, Toggle } from "../components/ui.tsx";
+import { useDraft } from "../drafts.ts";
 import { ago } from "../format.ts";
 import { RoleSelect } from "./ProjectPage.tsx";
 
@@ -58,6 +59,13 @@ export function InboxPage() {
             ))}
           </Section>
         )}
+        {data && data.blocked.length > 0 && (
+          <Section title="Blocked on the baseline">
+            {data.blocked.map((h) => (
+              <BlockedCard key={h.run.id} h={h} />
+            ))}
+          </Section>
+        )}
         {data && data.held.length > 0 && (
           <Section title="Held by a budget or an emergency">
             {data.held.map((h) => (
@@ -97,9 +105,9 @@ function From({ project, task, taskId, role }: { project: string; task?: string;
 }
 
 function QuestionCard({ q }: { q: InboxQuestion }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`answer:${q.task.id}`);
   const [record, setRecord] = useState(true);
-  const answer = useMutation({ mutationFn: () => api.answer(q.task.id, text.trim(), record) });
+  const answer = useMutation({ mutationFn: () => api.answer(q.task.id, text.trim(), record), onSuccess: () => setText("") });
   return (
     <article className={card} aria-label={`Question from ${q.task.title}`}>
       <From project={q.projectName} task={q.task.title} taskId={q.task.id} />
@@ -224,6 +232,31 @@ function HandoffCard({ h }: { h: Handoff & { projectName: string } }) {
         </Button>
       </div>
       <ErrorNote error={approve.error ?? reject.error} />
+    </article>
+  );
+}
+
+function BlockedCard({ h }: { h: InboxRun }) {
+  const stop = useMutation({ mutationFn: () => api.stopRun(h.run.id) });
+  return (
+    <article className={card} aria-label={`Blocked: ${h.task.title}`}>
+      <div className="flex items-center gap-2">
+        <PriorityBadge priority={h.task.priority} emergency={h.task.emergency} />
+        <Link to={`/tasks/${h.task.id}`} className="text-sm font-medium text-ink-100 hover:underline">
+          {h.task.title}
+        </Link>
+        <span className="ml-auto text-xs text-ink-400">{h.projectName}</span>
+      </div>
+      <p className="text-xs text-gold">{h.run.waitReason}</p>
+      <div className="flex items-center gap-2">
+        <Link to={`/projects/${h.task.projectId}`} className="text-xs text-accent underline">
+          Open Delivery &amp; baseline
+        </Link>
+        <Button onClick={() => stop.mutate()} disabled={stop.isPending}>
+          Take out of the queue
+        </Button>
+      </div>
+      <ErrorNote error={stop.error} />
     </article>
   );
 }

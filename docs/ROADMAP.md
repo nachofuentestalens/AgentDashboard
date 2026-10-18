@@ -71,6 +71,7 @@ Demo checklist (real Claude Code, on Windows):
 - [ ] Each writing task gets its own git worktree and branch; final approval shows the diff and merges; conflicts go to the Inbox with "Resolve with agent". Lifts the one-writer-per-department rule
   - [x] Persistent task worktrees, isolated runner/reviews, local end-of-run checkpoints and Pause & checkpoint UI; [recovery and rollout](WORKSPACES.md)
   - [x] GitHub checkpoint pushes and draft PRs, exact-commit approval/check gating and owner-triggered squash merge; manual deploy/revert instructions
+  - [x] Outcome-based checkpoint, PR, squash and integration titles from final run summaries, with changed-file fallbacks
   - [ ] Automatic conflict resolution and worktree cleanup; lift department concurrency limits after integration
 - [ ] Templates: Feature, Bugfix, Balance pass, Content batch; save your own
 - [ ] Promote a chat to a workflow
@@ -100,7 +101,12 @@ Demo checklist (real Claude Code, on Windows):
 
 ## Project coordinator
 
+- [x] Sidebar provider activity counts with collapsible project groups, model/task links and hover details beside session remaining
+
+- [x] Owner-requested server restart with queue hold, agent handoffs, verified checkpoints, and persistent sessions; [restart flow](SERVER_RESTART.md)
+
 - [x] Coordinator tab: per-provider session and weekly usage from CLI rate-limit reports, owner readings, limit failures and optional token caps
 - [x] Owner reserve, conserve band and weekly pacing; queued work held by provider and priority (auto mode) with "run anyway"
 - [x] Pause running role work inside the reserve, resume it after the reset, start backlog work before unused session usage resets, move held work to the other provider
+- [x] Route automatic project work by available provider headroom and load without waiting for reset; use review-first complexity routing for model selection
 - [ ] Read Claude's and ChatGPT's usage pages directly when their CLIs expose them, instead of owner readings

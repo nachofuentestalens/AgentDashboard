@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { App } from "../src/app.ts";
-import type { BaselinePreview, DeliveryPlanPreview, ProjectBaseline } from "@ad/shared";
+import type { BaselinePreview, DeliveryPlanPreview, Inbox, ProjectBaseline } from "@ad/shared";
 import { Workspaces } from "../src/workspaces.ts";
 import { api, git, gitRepo, newProject, newTask, stepFinished, testApp, waitFor } from "./helpers.ts";
 
@@ -82,12 +82,14 @@ describe("managed project delivery", () => {
     await workspaces.checkpoint(next.id, "saved WIP");
     const fw = await workspaces.ensure(first.id, repo);
     fs.writeFileSync(path.join(fw.path, "contract.md"), "approved output");
-    const checkpoint = await workspaces.checkpoint(first.id, "first output");
+    const checkpoint = await workspaces.checkpoint(first.id, "first output", { title: "Write contract", taskTitle: "Define the gameplay contract" });
     await approveTask(first.id);
     const preview = await api<BaselinePreview>(app, "POST", `${endpoint}/integrate`, { taskId: first.id });
     expect(preview.status).toBe(200);
     expect(preview.body.sourceCommit).toBe(checkpoint!.checkpointCommit);
     expect((await api(app, "POST", `${endpoint}/approve`, { previewId: preview.body.id })).status).toBe(200);
+    // A fast-forward preserves the checkpoint and its run-specific subject.
+    expect(git(repo, "show", "-s", "--format=%s", app.store.projectBaseline(projectId)!.commit)).toBe("Write contract");
     app.runner.send(next.id, "Read the approved contract");
     await stepFinished(app, next.id);
     expect(fs.readFileSync(path.join(nw.path, "saved-wip.txt"), "utf8")).toBe("preserve me");
@@ -111,6 +113,29 @@ describe("managed project delivery", () => {
     expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:agent-work.txt`)).toBe("Unfinished agent work");
     expect(git(repo, "rev-parse", "HEAD")).toBe(liveHead);
     await waitFor(() => app.store.listRuns(next.id).length > 0, 15_000);
+  });
+
+  it("shows a baseline-blocked successor in the inbox and integrates its plainly approved prerequisite under hands-off delivery", async () => {
+    const { repo, projectId, programmer, qa, workspaces, snapshot, approveTask } = await setup();
+    await snapshot();
+    const first = await newTask(app, projectId, { roleId: programmer });
+    const fw = await workspaces.ensure(first.id, repo);
+    fs.writeFileSync(path.join(fw.path, "contract.md"), "approved output");
+    await workspaces.checkpoint(first.id, "first output");
+    // Approved without integrating: the dependency graph is satisfied but the baseline lacks the output.
+    await approveTask(first.id);
+    const next = await newTask(app, projectId, { roleId: qa, dependencyIds: [first.id], requiredPaths: ["contract.md"] });
+    app.runner.send(next.id, "Read the approved contract");
+    await waitFor(() => (app.store.listRuns(next.id).at(-1)?.waitReason ?? "").startsWith("Baseline: integrate"));
+    const inbox = await api<Inbox>(app, "GET", "/api/inbox");
+    expect(inbox.body.blocked.map((b) => b.task.id)).toEqual([next.id]);
+    expect(inbox.body.held).toEqual([]);
+
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoApprove: true });
+    app.runner.tick();
+    await stepFinished(app, next.id);
+    expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:contract.md`)).toBe("approved output");
+    expect((await api<Inbox>(app, "GET", "/api/inbox")).body.blocked).toEqual([]);
   });
 
   it("refuses stale approval and leaves conflicting worktrees untouched", async () => {

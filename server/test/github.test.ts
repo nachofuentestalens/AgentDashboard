@@ -22,7 +22,7 @@ async function fixture() {
   const workspaces = new Workspaces(instance.store, tempDir("ad-github-workspaces-"));
   const w = await workspaces.ensure(task.id, repo);
   fs.writeFileSync(path.join(w.path, "work.txt"), "Unfinished work");
-  const saved = (await workspaces.checkpoint(task.id, "Pause"))!;
+  const saved = (await workspaces.checkpoint(task.id, "End of agent run", { title: "Save workspace output", taskTitle: "Preserve isolated task work" }))!;
   const calls: { endpoint: string; method: string; body: any }[] = [];
   const pushes: string[][] = [];
   const state = {
@@ -93,9 +93,15 @@ describe("GitHub checkpoint publication", () => {
     expect(first?.publishedCommit).toBe(f.saved.checkpointCommit);
     expect(first?.pullRequestUrl).toBe("https://github.com/owner/game/pull/12");
     expect(f.pushes[0]).toEqual(["push", "origin", `${f.saved.checkpointCommit}:refs/heads/${f.w.branch}`]);
-    expect(f.calls.find((c) => c.method === "POST" && c.endpoint.endsWith("/pulls"))?.body).toMatchObject({ draft: true, base: "main", head: f.w.branch });
+    expect(f.calls.find((c) => c.method === "POST" && c.endpoint.endsWith("/pulls"))?.body).toMatchObject({
+      draft: true,
+      base: "main",
+      head: f.w.branch,
+      title: "Preserve isolated task work",
+    });
     await f.github.publish(f.task.id);
     expect(f.calls.filter((c) => c.method === "POST" && c.endpoint.endsWith("/pulls"))).toHaveLength(1);
+    expect(f.calls.find((c) => c.method === "PATCH")?.body.title).toBe("Preserve isolated task work");
     expect(git(f.w.path, "status", "--porcelain")).toBe("");
   });
 
@@ -140,7 +146,11 @@ describe("GitHub checkpoint publication", () => {
     f.state.sha = f.saved.checkpointCommit!;
     const merged = await f.github.merge(f.task.id);
     expect(merged.mergeCommit).toBe("abc1234");
-    expect(f.calls.find((c) => c.endpoint.endsWith("/merge"))?.body).toEqual({ sha: f.saved.checkpointCommit, merge_method: "squash" });
+    expect(f.calls.find((c) => c.endpoint.endsWith("/merge"))?.body).toEqual({
+      sha: f.saved.checkpointCommit,
+      merge_method: "squash",
+      commit_title: "Preserve isolated task work",
+    });
     expect(git(f.repo, "status", "--porcelain")).toBe("");
     expect((await api(f.instance, "POST", `/api/tasks/${f.task.id}/messages`, { text: "more" })).status).toBe(409);
   });

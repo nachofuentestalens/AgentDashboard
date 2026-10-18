@@ -2,7 +2,8 @@ import os from "node:os";
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
 
-const port = 5199;
+// E2E_PORT lets several worktrees run the suite at once.
+const port = Number(process.env.E2E_PORT) || 5199;
 // A fresh data folder per run, so tests never see a previous run's projects.
 const dataDir = path.join(os.tmpdir(), `agent-dashboard-e2e-${Date.now()}`);
 

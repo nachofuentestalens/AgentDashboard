@@ -55,6 +55,7 @@ describe("isolated task workspaces", () => {
     fs.writeFileSync(path.join(w.path, "ignored.txt"), "local secret");
     const saved = await manager.checkpoint(task.id, "Token allowance exhausted");
     expect(saved?.error).toBeNull();
+    expect(git(w.path, "log", "-1", "--format=%s")).toBe("Update .gitignore, new.txt and 1 more files");
     expect(git(w.path, "status", "--porcelain")).toBe("");
     expect(git(w.path, "diff", "--name-status", original)).toContain("D\ttracked.txt");
     expect(git(w.path, "ls-files")).not.toContain("ignored.txt");
@@ -74,13 +75,15 @@ describe("isolated task workspaces", () => {
     const { instance, repo, projectId } = await setup();
     fs.writeFileSync(path.join(repo, "owner.txt"), "Owner changes");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "Owner edit\n");
-    const task = await newTask(instance, projectId, { message: "[write-workspace]" });
+    const task = await newTask(instance, projectId, { message: "[write-workspace] [commit-summary]" });
     const runId = instance.store.listRuns(task.id)[0]!.id;
     const run = await runFinished(instance, runId);
     expect(run.status).toBe("succeeded");
     const notices = instance.runner.readEvents(runId).flatMap((e) => (e.event.kind === "notice" ? [e.event.text] : []));
     expect(notices.some((t) => t.includes("uncommitted changes"))).toBe(true);
     const w = instance.store.getWorkspace(task.id)!;
+    expect(git(w.path, "log", "-1", "--format=%s")).toBe("Add agent workspace output");
+    expect(git(w.path, "log", "-1", "--format=%B")).toContain("Task-summary: Preserve agent work in isolated workspaces");
     expect(w.baseCommit).toBe(git(repo, "rev-parse", "HEAD"));
     expect(fs.existsSync(path.join(w.path, "owner.txt"))).toBe(false);
     // Checkout may convert line endings (core.autocrlf on Windows).
@@ -103,6 +106,7 @@ describe("isolated task workspaces", () => {
     expect((await runFinished(instance, runId)).status).toBe("stopped");
     const w = instance.store.getWorkspace(task.id)!;
     expect(w.checkpointCommit).toBeTruthy();
+    expect(git(w.path, "log", "-1", "--format=%s")).toBe("Update agent-work.txt");
     expect(git(w.path, "show", `${w.checkpointCommit}:agent-work.txt`)).toBe("Unfinished agent work");
     expect(fs.existsSync(path.join(repo, "agent-work.txt"))).toBe(false);
     const res = await api<{ run: { id: string } }>(instance, "POST", `/api/tasks/${task.id}/messages`, { text: "continue" });

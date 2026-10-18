@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { commitSummary } from "./commit-summary.ts";
 import path from "node:path";
 import readline from "node:readline";
 import {
@@ -91,6 +92,28 @@ const AUTO_FIX_ROUNDS = 3;
 // A plain chat runs at once. A role's task is queued, and the scheduler starts it when one of the
 // role's agents is free and the compute rules allow. One run per task at a time.
 export class Runner {
+  restartHeld = false;
+
+  restartBusy(): boolean {
+    return this.active.size > 0 || this.workspaceBusy.size > 0 || this.deliveryBusy.size > 0 || this.tickPending;
+  }
+
+  prepareRestartHandoff(taskId: string): Run {
+    const task = this.store.getTask(taskId);
+    if (!this.restartHeld || !task || this.isTaskRunning(taskId)) throw new RunnerError("Task is not ready for a restart handoff.", 409);
+    this.checkBudget(task);
+    if (task.sessionProvider && task.sessionProvider !== this.choice(task).provider)
+      throw new RunnerError("Restore the task's current session provider before preparing its restart handoff.", 409);
+    const text = `The owner requested a server restart. Your worktree and provider session will be preserved. Save a restart handoff now so work can continue after restart.\n\n${HANDOFF_REQUEST}`;
+    const message = this.store.addMessage({ taskId, role: "user", text, runId: null });
+    return this.startNow(task, message, text, "handoff");
+  }
+
+  async saveRestartCheckpoint(taskId: string): Promise<void> {
+    const saved = await this.workspaces.checkpoint(taskId, "Server restart");
+    if (saved?.error) throw new RunnerError(saved.error, 409);
+  }
+
   modelOptions: Record<Provider, readonly ModelOption[]> = MODEL_PRESETS;
   private readonly contextFingerprints = new Map<string, string>();
   private readonly active = new Map<string, ActiveRun>();
@@ -104,6 +127,8 @@ export class Runner {
   private readonly deliveryPending = new Set<string>();
   // taskId:checkpoint pairs whose automatic delivery failed; the owner takes over until the checkpoint changes.
   private readonly deliveryFailed = new Set<string>();
+  // taskId:checkpoint:baseline → whether the checkpoint is an ancestor of that baseline.
+  private readonly integratedCache = new Map<string, boolean>();
   private tickPending = false;
   private tickAgain = false;
   private closed = false;
@@ -148,6 +173,7 @@ export class Runner {
   }
 
   async deliveryOperation<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
+    if (this.restartHeld) throw new RunnerError("Server restart requested; cancel it before starting delivery.", 409);
     if (this.isProjectBusy(projectId)) throw new RunnerError("A delivery operation is already running for this project.", 409);
     if (this.store.listTasks(projectId).some((t) => this.isTaskRunning(t.id)))
       throw new RunnerError("Wait for this project's running agents and checkpoint operations before changing its baseline.", 409);
@@ -462,7 +488,7 @@ export class Runner {
 
   // Runs a scheduling pass soon. Calls in the same turn of the event loop share one pass.
   tick(): void {
-    if (this.closed) return;
+    if (this.closed || this.restartHeld) return;
     if (this.tickPending) {
       this.tickAgain = true;
       return;
@@ -470,9 +496,9 @@ export class Runner {
     this.tickPending = true;
     setImmediate(async () => {
       try {
-        if (this.closed) return;
+        if (this.closed || this.restartHeld) return;
         await this.deliverReviewed();
-        if (this.closed) return;
+        if (this.closed || this.restartHeld) return;
         this.startIdleBacklog();
         let holds = new Map<Provider, ProviderHold>();
         try {
@@ -523,10 +549,12 @@ export class Runner {
           !this.deliveryFailed.has(key(t)) &&
           this.passedOnCheckpoint(t),
       );
+      ready.push(...(await this.approvedOutsideBaseline(project.id, tasks)).filter((t) => !this.deliveryFailed.has(key(t))));
       if (ready.length === 0) continue;
       this.deliveryPending.add(project.id);
       if (tasks.some((t) => this.isTaskRunning(t.id))) continue;
       for (const task of ready) {
+        if (this.closed || this.restartHeld) return;
         try {
           await this.deliver(project.id, task.id);
           this.note(task.id, "info", "Approved and integrated automatically after the passed agent review (project setting).");
@@ -538,6 +566,28 @@ export class Runner {
       }
       this.deliveryPending.delete(project.id);
     }
+  }
+
+  // A plain approval satisfies the dependency graph but leaves the checkpoint outside the baseline,
+  // so successors would wait on readiness forever. Integrate those an open task still needs.
+  private async approvedOutsideBaseline<T extends Task>(projectId: string, tasks: T[]): Promise<T[]> {
+    const baseline = this.store.projectBaseline(projectId);
+    if (!baseline) return [];
+    const needed = new Set(tasks.filter((t) => t.stage !== "approved" && t.stage !== "closed").flatMap((t) => t.dependencyIds));
+    const missing: T[] = [];
+    for (const task of tasks) {
+      const w = this.store.getWorkspace(task.id);
+      if (!needed.has(task.id) || task.stage !== "approved" || task.status !== "idle" || !w?.checkpointCommit || w.error) continue;
+      if (w.approvedCommit !== w.checkpointCommit || !this.store.taskApproved(task)) continue;
+      const key = `${task.id}:${w.checkpointCommit}:${baseline.commit}`;
+      let present = this.integratedCache.get(key);
+      if (present === undefined) {
+        present = (await git(baseline.repoPath, ["merge-base", "--is-ancestor", w.checkpointCommit, baseline.commit])).ok;
+        this.integratedCache.set(key, present);
+      }
+      if (!present) missing.push(task);
+    }
+    return missing;
   }
 
   // A notice after the fact goes on the task's latest finished run, so it shows in the transcript.
@@ -553,9 +603,11 @@ export class Runner {
     this.bus.publish({ type: "run_event", runId: run.id, taskId, stamped });
   }
 
-  // Projects that opt in: staffed roles start their top backlog tasks, as the owner's Start would,
-  // while the role has a free agent, the task's provider a free slot and (for editing work) its
-  // department no other writer. Every pass re-reads the limits, so raising one starts more work.
+  // Projects that opt in: staffed roles first resume steps their agents left partial (within the
+  // project's automatic continuation limit), then start their top backlog tasks, as the owner's
+  // Start would. Each needs a free agent of its role, a free slot for its provider and (for editing
+  // work) no other writer in its department. Every pass re-reads the limits, so raising one starts
+  // more work.
   private startIdleBacklog(): void {
     const projects = this.store.listProjects().filter((p) => p.startNextWhenIdle);
     if (projects.length === 0) return;
@@ -573,28 +625,41 @@ export class Runner {
     }
     const agents = new Map<string, number>();
     for (const a of this.store.listAgents()) if (!a.paused) add(agents, a.roleId);
+
+    // Runs the start when the task fits, and counts it against the role, provider and writer slot.
+    const tryStart = (task: Task, begin: () => void) => {
+      if (!task.roleId || (roleLoad.get(task.roleId) ?? 0) >= (agents.get(task.roleId) ?? 0) || this.store.dependencyBlocker(task)) return;
+      const provider = this.taskProvider(task);
+      if ((providerLoad.get(provider) ?? 0) >= limits[provider]) return;
+      const role = this.store.getRole(task.roleId);
+      const edits = !!role?.canEdit && task.canEdit;
+      if (edits && writers.has(role!.departmentId)) return;
+      try {
+        begin();
+        add(roleLoad, task.roleId);
+        add(providerLoad, provider);
+        if (edits) writers.add(role!.departmentId);
+      } catch {
+        // A budget or a removed role holds it; the owner sees the task where it was.
+      }
+    };
+
     for (const project of projects) {
       if (this.isProjectBusy(project.id) || this.deliveryPending.has(project.id) || this.store.deliveryPaused(project.id)) continue;
-      for (const task of this.store.backlogTasks(project.id)) {
-        if (!task.roleId || (roleLoad.get(task.roleId) ?? 0) >= (agents.get(task.roleId) ?? 0) || this.store.dependencyBlocker(task)) continue;
-        const provider = this.taskProvider(task);
-        if ((providerLoad.get(provider) ?? 0) >= limits[provider]) continue;
-        const role = this.store.getRole(task.roleId);
-        const edits = !!role?.canEdit && task.canEdit;
-        if (edits && writers.has(role!.departmentId)) continue;
-        try {
-          this.stageAction(task.id, { action: "start" });
-          add(roleLoad, task.roleId);
-          add(providerLoad, provider);
-          if (edits) writers.add(role!.departmentId);
-        } catch {
-          // A budget or a removed role holds it; the owner sees the task still in the backlog.
-        }
+      for (const task of this.store.stalledTasks(project.id)) {
+        if (task.autoContinues >= project.autoContinueSteps || this.budgetReason(task)) continue;
+        tryStart(task, () => {
+          this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
+          this.note(task.id, "info", `Resuming the unfinished step automatically (${task.autoContinues + 1} of ${project.autoContinueSteps}).`);
+          this.send(task.id, task.nextStep ? `Continue the unfinished step: ${task.nextStep}` : "Continue the unfinished step.", true);
+        });
       }
+      for (const task of this.store.backlogTasks(project.id)) tryStart(task, () => this.stageAction(task.id, { action: "start" }));
     }
   }
 
   private requireIdleTask(taskId: string, deliveryApproval = false): Task {
+    if (this.restartHeld) throw new RunnerError("Server restart requested; cancel it before changing task work.", 409);
     const task = this.store.getTask(taskId);
     if (!task) throw new RunnerError("Task not found.", 404);
     if (this.isProjectBusy(task.projectId) && !deliveryApproval) throw new RunnerError("Wait for the project's delivery operation to finish.", 409);
@@ -752,14 +817,16 @@ export class Runner {
   // a passed one up to the project's step limit, or (hands-off delivery) send the findings back to
   // the author. Approval itself happens in deliverReviewed.
   // ended: the work run that finished a step, or the review run that gave a verdict.
-  private automate(taskId: string, ended: Run, record: (event: AgentEvent) => void): void {
+  private automate(taskId: string, ended: Run, record: (event: AgentEvent) => void): boolean {
+    // True when an automatic run carries on from this one, so the owner is not alerted yet.
+    if (this.restartHeld) return false;
     const task = this.store.getTask(taskId);
     const project = task ? this.store.getProject(task.projectId) : null;
-    if (!task || !project || task.status !== "idle") return;
+    if (!task || !project || task.status !== "idle") return false;
     try {
       if (ended.purpose === "review" && task.stage === "changes_requested") {
         const review = this.store.listTaskReviews(task.id).at(-1);
-        if (!project.autoApprove || review?.runId !== ended.id || task.autoContinues >= AUTO_FIX_ROUNDS) return;
+        if (!project.autoApprove || review?.runId !== ended.id || task.autoContinues >= AUTO_FIX_ROUNDS) return false;
         this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
         record({
           kind: "notice",
@@ -767,13 +834,13 @@ export class Runner {
           text: `Sending the findings back to the author automatically (${task.autoContinues + 1} of ${AUTO_FIX_ROUNDS}).`,
         });
         this.send(task.id, ["Address these review findings:", ...review.findings.map((f) => `- ${f}`)].join("\n"), true);
-        return;
+        return true;
       }
-      if (task.stage !== "needs_review") return;
+      if (task.stage !== "needs_review") return false;
       if (ended.purpose === "review") {
         const passed = this.store.listTaskReviews(task.id).at(-1);
-        if (passed?.runId !== ended.id || passed.verdict !== "pass") return;
-        if (task.stepState !== "done" || !task.nextStep || task.autoContinues >= project.autoContinueSteps) return;
+        if (passed?.runId !== ended.id || passed.verdict !== "pass") return false;
+        if (task.stepState !== "done" || !task.nextStep || task.autoContinues >= project.autoContinueSteps) return false;
         this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
         record({
           kind: "notice",
@@ -781,18 +848,24 @@ export class Runner {
           text: `Continuing automatically (${task.autoContinues + 1} of ${project.autoContinueSteps}): ${task.nextStep}`,
         });
         this.send(task.id, `Continue with: ${task.nextStep}`, true);
+        return true;
       } else if (project.autoReview) {
         // A reply that changed no files (a status question, say) keeps the earlier passed review.
         if (this.store.getWorkspace(task.id) && this.passedOnCheckpoint(task)) {
           record({ kind: "notice", level: "info", text: "No changes since the passed agent review, so it is not reviewed again." });
-          return;
+          return false;
         }
         record({ kind: "notice", level: "info", text: "Asking for an agent review automatically (project setting)." });
-        this.startReview(task.id).catch((error: Error) => record({ kind: "notice", level: "warn", text: `Automatic review did not start: ${error.message}` }));
+        this.startReview(task.id).catch((error: Error) => {
+          record({ kind: "notice", level: "warn", text: `Automatic review did not start: ${error.message}` });
+          this.bus.publish({ type: "reply_ready", run: this.store.getRun(ended.id) ?? ended });
+        });
+        return true;
       }
     } catch (error) {
       record({ kind: "notice", level: "warn", text: `Automation stopped: ${(error as Error).message}` });
     }
+    return false;
   }
 
   // A review that ends without a verdict hands the work back to the owner.
@@ -853,7 +926,7 @@ export class Runner {
         }
       }
     }
-    if (this.closed) return;
+    if (this.closed || this.restartHeld) return;
     const queuedRuns = this.store.runsWithStatus("queued");
     if (queuedRuns.length === 0) return;
 
@@ -989,6 +1062,7 @@ export class Runner {
         this.publishTask(this.store.setTaskStatus(failed.taskId, "failed"));
       }
       this.bus.publish({ type: "run_updated", run: failed });
+      this.bus.publish({ type: "reply_ready", run: failed });
       this.tick();
       return failed;
     }
@@ -1121,8 +1195,13 @@ export class Runner {
       // interrupted, which is what happened.
       if (this.closed) return;
       let checkpointError: string | null = null;
+      const reply = (result && !result.isError ? result.text : "") || finalText(events);
       if (canEdit) {
-        const saved = await this.workspaces.checkpoint(task.id, active.stopRequested ? "Paused work" : "End of agent run");
+        const saved = await this.workspaces.checkpoint(
+          task.id,
+          active.stopRequested ? "Paused work" : "End of agent run",
+          !active.stopRequested && result && !result.isError ? commitSummary(reply) : null,
+        );
         checkpointError = saved?.error ?? null;
         if (this.closed) return;
         if (saved)
@@ -1147,7 +1226,6 @@ export class Runner {
           : status === "failed"
             ? checkpointError || (result?.isError ? result.text : null) || exitError || stderrTail.trim() || `${cli.name} exited without a result.`
             : null;
-      const reply = (result && !result.isError ? result.text : "") || finalText(events);
       if (reply.trim()) this.store.addMessage({ taskId: task.id, role: "assistant", text: reply, runId: run.id });
       // A review's reply is advice about the work, never a handoff of the author's session.
       if (reviewing) {
@@ -1230,8 +1308,8 @@ export class Runner {
       );
       // The finished step or the review's verdict now shows in the owner's inbox.
       if (finishedStep || reviewing) this.bus.publish({ type: "inbox_changed" });
-      if (finishedStep || reviewing) this.automate(task.id, run, record);
-      if (requestedSwitch) {
+      let continued = finishedStep || reviewing ? this.automate(task.id, run, record) : false;
+      if (requestedSwitch && !this.restartHeld) {
         const currentTask = this.store.getTask(task.id)!;
         const currentChoice = this.choice(currentTask);
         const handoff = extractHandoff(reply);
@@ -1270,11 +1348,14 @@ export class Runner {
             const continuation = `<model-continuation>\nOriginal owner request:\n${original.text}\n\nNext step:\n${review.nextStep}\n</model-continuation>`;
             if (task.roleId) this.enqueue(updated, original, continuation);
             else this.startNow(updated, original, continuation);
+            continued = true;
           } catch (error) {
             record({ kind: "notice", level: "warn", text: `Could not continue after model switch: ${(error as Error).message}` });
           }
         }
       }
+      // Desktop alerts announce a reply only when nothing automatic carries on from it.
+      if (finished && !continued) this.bus.publish({ type: "reply_ready", run: finished });
       this.tick();
     };
 
@@ -1305,6 +1386,11 @@ export class Runner {
         record({ kind: "notice", level: "info", text: `Isolated worktree: ${workspace.path} (${workspace.branch}). The project checkout is unchanged.` });
         prompt +=
           "\n\nMake repository changes only in this task's isolated worktree. Keep its assigned branch. The dashboard saves local WIP commits after runs; do not switch branches, merge into the live checkout, or remove the worktree. Dependencies may need installing in this separate folder. External tools and services may be used when required by the owner's request.";
+        if (canEdit)
+          prompt +=
+            '\n\nWhen you change repository files, include a fenced commit-summary JSON block in your final reply: {"title":"Describe what this run changed","taskTitle":"Describe what all changes on this task branch achieved"}. Use concise imperative Git titles (maximum 120 characters each), grounded in the actual diff, not the initial request. Inspect the diff against the task base commit ' +
+            workspace.baseCommit +
+            " for taskTitle so it covers earlier runs too. Describe partial work honestly; do not claim unimplemented outcomes. These titles name the local checkpoint and the draft PR/squash commit; they do not approve or merge anything.";
       }
       let launcher: Launcher;
       let args: string[];

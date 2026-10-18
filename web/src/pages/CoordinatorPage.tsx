@@ -312,8 +312,8 @@ function PolicyForm({ config, onSaved }: { config: CoordinatorConfig; onSaved: (
         <Toggle
           checked={c.fillIdle}
           onChange={(fillIdle) => setC({ ...c, fillIdle })}
-          label="Start backlog work before unused session usage resets"
-          hint="Within 2 hours of a session reset, with at least 25% above the reserve left"
+          label="Use available capacity for automatic work"
+          hint="Start backlog work with 25% above the reserve; route start-next projects by provider headroom and load. Agents choose models by complexity."
         />
         <Toggle
           checked={c.switchProvider}

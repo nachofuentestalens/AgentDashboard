@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { Task } from "@ad/shared";
+import { DEFAULT_COORDINATOR_CONFIG, type Task } from "@ad/shared";
 import type { App } from "../src/app.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -220,13 +220,14 @@ describe("task stages", () => {
     const first = await newTask(app, projectId, { roleId: qa.id, title: "First check", priority: 9, message: "work [review-pass]" });
     const second = await newTask(app, projectId, { roleId: qa.id, title: "Second check" });
     await api(app, "PATCH", `/api/projects/${projectId}`, { autoReview: true, startNextWhenIdle: true, autoApprove: true });
-    await waitFor(() => app.store.getTask(first.id)!.stage === "approved", 15_000);
+    // Work, review and baseline integration run back to back; Windows CI has taken over 15 s here.
+    await waitFor(() => app.store.getTask(first.id)!.stage === "approved", 40_000);
     expect(app.store.listRuns(first.id).map((r) => r.purpose)).toEqual(["work", "review"]);
     expect(app.store.listTaskReviews(first.id).map((r) => [r.reviewer === "owner" ? "owner" : "agent", r.verdict])).toEqual([
       ["agent", "pass"],
       ["owner", "approved"],
     ]);
-    await waitFor(() => app.store.listRuns(second.id).length > 0, 15_000);
+    await waitFor(() => app.store.listRuns(second.id).length > 0, 40_000);
   });
 
   it("sends review findings back a bounded number of times under hands-off delivery", async () => {
@@ -273,6 +274,20 @@ describe("task stages", () => {
     expect(app.store.getTask(first.id)!.status).toBe("running");
   });
 
+  it("resumes a step its agent left partial when the project opts in, within the continuation limit", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 1 });
+    const task = await newTask(app, projectId, { roleId: qa.id, message: "work [step-partial]" });
+    await waitFor(() => app.store.getTask(task.id)!.stepState === "partial" && app.store.getTask(task.id)!.status === "idle");
+    expect(app.store.listRuns(task.id)).toHaveLength(1);
+
+    await api(app, "PATCH", `/api/projects/${projectId}`, { startNextWhenIdle: true });
+    await stepFinished(app, task.id);
+    expect(app.store.listRuns(task.id)).toHaveLength(2);
+    expect(app.store.listMessages(task.id).filter((m) => m.role === "user")[1]!.text).toMatch(/^Continue the unfinished step/);
+    expect(app.store.getTask(task.id)).toMatchObject({ stage: "needs_review", autoContinues: 1 });
+  });
+
   it("maps the legacy done flag to approve and close", async () => {
     const { app, projectId, qa } = await roleProject();
     const task = await newTask(app, projectId, { roleId: qa.id, message: "check" });
@@ -281,5 +296,27 @@ describe("task stages", () => {
     expect(closed).toMatchObject({ status: "idle", stage: "closed" });
     expect(app.store.listTaskReviews(task.id).map((r) => r.verdict)).toEqual(["approved"]);
     expect((await api<Task>(app, "PATCH", `/api/tasks/${task.id}`, { done: false })).body.stage).toBe("backlog");
+  });
+
+  it("routes start-next work to available Codex and runs its complexity model review", async () => {
+    const { app, projectId, qa } = await roleProject();
+    for (const provider of ["claude", "codex"]) {
+      await api(app, "POST", "/api/coordinator/readings", {
+        provider,
+        window: "session",
+        usedPercent: provider === "claude" ? 50 : 1,
+        resetsAt: new Date(Date.now() + 5 * 3_600_000).toISOString(),
+      });
+    }
+    await api(app, "PUT", "/api/coordinator/config", { ...DEFAULT_COORDINATOR_CONFIG, mode: "auto", fillIdle: true });
+    // Change the project directly so the next scheduling pass observes both task and policy together.
+    app.store.updateProject(projectId, { startNextWhenIdle: true });
+    const task = await newTask(app, projectId, { roleId: qa.id, title: "Small check [switch-model]" });
+    app.runner.tick();
+    await waitFor(() => app.store.listRuns(task.id).length === 2 && app.store.listRuns(task.id).at(-1)?.status === "succeeded");
+    const runs = app.store.listRuns(task.id);
+    expect(runs.map((r) => r.provider)).toEqual(["codex", "codex"]);
+    expect(runs[1]).toMatchObject({ model: "demo-model-2", effort: "low" });
+    expect(app.store.getTask(task.id)!.stage).toBe("needs_review");
   });
 });
