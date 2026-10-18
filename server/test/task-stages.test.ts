@@ -257,6 +257,20 @@ describe("task stages", () => {
     expect(app.store.listMessages(first.id)[0]!.text).toBe("Start on this task: Urgent check");
   });
 
+  it("resumes a step its agent left partial when the project opts in, within the continuation limit", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 1 });
+    const task = await newTask(app, projectId, { roleId: qa.id, message: "work [step-partial]" });
+    await waitFor(() => app.store.getTask(task.id)!.stepState === "partial" && app.store.getTask(task.id)!.status === "idle");
+    expect(app.store.listRuns(task.id)).toHaveLength(1);
+
+    await api(app, "PATCH", `/api/projects/${projectId}`, { startNextWhenIdle: true });
+    await stepFinished(app, task.id);
+    expect(app.store.listRuns(task.id)).toHaveLength(2);
+    expect(app.store.listMessages(task.id).filter((m) => m.role === "user")[1]!.text).toMatch(/^Continue the unfinished step/);
+    expect(app.store.getTask(task.id)).toMatchObject({ stage: "needs_review", autoContinues: 1 });
+  });
+
   it("maps the legacy done flag to approve and close", async () => {
     const { app, projectId, qa } = await roleProject();
     const task = await newTask(app, projectId, { roleId: qa.id, message: "check" });

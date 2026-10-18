@@ -68,6 +68,9 @@ it("does not automatically switch after the cumulative token checkpoint is reach
 
 it("validates the complete review and provider effort before applying it", () => {
   expect(parseModelReview('```model-review\n{"model":"x"}\n```')).toBeNull();
+  const labelled = '{"complexity":"complex","model":"m","effort":"high","reason":"r","action":"switch","nextStep":"n"}';
+  expect(parseModelReview(`model-review\n\`\`\`json\n${labelled}\n\`\`\``)?.action).toBe("switch");
+  expect(parseModelReview(`Some json:\n\`\`\`json\n${labelled}\n\`\`\``)).toBeNull();
   expect(
     validateModelReview({ complexity: "simple", model: null, effort: "max", reason: "test", action: "switch", nextStep: "implement" }, "codex", [], {
       provider: "codex",
