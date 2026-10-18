@@ -569,8 +569,9 @@ export class Runner {
     this.bus.publish({ type: "run_event", runId: run.id, taskId, stamped });
   }
 
-  // Projects that opt in: a staffed role with nothing queued or running starts its top backlog
-  // task, as the owner's Start would.
+  // Projects that opt in: a staffed role with nothing queued or running first resumes a step its
+  // agent left partial (within the project's automatic continuation limit), else starts its top
+  // backlog task, as the owner's Start would.
   private startIdleBacklog(): void {
     const projects = this.store.listProjects().filter((p) => p.startNextWhenIdle);
     if (projects.length === 0) return;
@@ -583,6 +584,18 @@ export class Runner {
     );
     for (const project of projects) {
       if (this.isProjectBusy(project.id) || this.deliveryPending.has(project.id) || this.store.deliveryPaused(project.id)) continue;
+      for (const task of this.store.stalledTasks(project.id)) {
+        if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId) || task.autoContinues >= project.autoContinueSteps) continue;
+        if (this.budgetReason(task) || this.store.dependencyBlocker(task)) continue;
+        busy.add(task.roleId);
+        try {
+          this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
+          this.note(task.id, "info", `Resuming the unfinished step automatically (${task.autoContinues + 1} of ${project.autoContinueSteps}).`);
+          this.send(task.id, task.nextStep ? `Continue the unfinished step: ${task.nextStep}` : "Continue the unfinished step.", true);
+        } catch {
+          // A budget or a removed role holds it; the task stays in progress for the owner.
+        }
+      }
       for (const task of this.store.backlogTasks(project.id)) {
         if (!task.roleId || busy.has(task.roleId) || !staffed.has(task.roleId) || this.store.dependencyBlocker(task)) continue;
         busy.add(task.roleId);

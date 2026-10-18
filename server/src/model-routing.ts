@@ -17,7 +17,9 @@ const reviewSchema = z
 export type ModelReview = z.infer<typeof reviewSchema>;
 
 export function parseModelReview(text: string): ModelReview | null {
-  const blocks = [...text.matchAll(/```model-review\s*\n([\s\S]*?)\n```/g)];
+  // Agents also write the label on its own line above a json fence; missing that ignored a switch
+  // and the agent delegated a copy of its own task instead.
+  const blocks = [...text.matchAll(/(?:```model-review|(?:^|\n)[ \t]*model-review:?[ \t]*\n```json)[ \t]*\n([\s\S]*?)\n```/g)];
   const body = blocks.at(-1)?.[1];
   if (!body || body.length > 4000) return null;
   try {

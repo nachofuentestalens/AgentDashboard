@@ -82,7 +82,9 @@ The agent reports progress with a new reply block, which `blocks.ts` parses like
 
 - `done`: one step is finished and more remain (`next` describes the following step). Stage becomes `needs_review`.
 - `complete`: the agent thinks the whole task is finished. Stage becomes `needs_review`, and the row is marked "Agent: complete".
-- `partial`: the agent stopped mid-step, for example on a budget or because it needs input. The stage stays `in_progress`.
+- `partial`: the agent stopped mid-step, for example on a budget or because it needs input. The stage stays `in_progress`. With
+  "start next when idle", an idle staffed role resumes such a step before starting backlog work, counted against the project's
+  automatic continuation limit (an owner message resets the count).
 - **No block**: a successful work run is treated as `done` (the stage becomes `needs_review`). A malformed block becomes a warning
   notice, as other blocks do.
 
