@@ -62,6 +62,9 @@ Rules that are not shown in the diagram:
 - When the agent asks a question (activity `waiting`), the stage stays the same. Answering it continues the work.
 - An automatic model switch, a handoff continuation or a budget checkpoint pause stays in `in_progress`. These do not count as a finished step.
 - If the owner sends a message in `needs_review` or `changes_requested`, that counts as **Continue** or **Fix**: the stage goes back to `in_progress`.
+- Messages to `approved` or `closed` tasks are refused (409): start a new task for follow-up work, or move it back to the
+  backlog. A work run still queued on such a task (from an older server) is stopped by the next scheduling pass, since it could
+  never start and would hold dependents back.
 - **Close** from `approved` is the usual path. The owner can also close (drop) a task from any other stage except `in_review`, while
   no agent is running. `PATCH {done: true}` on `needs_review` approves and then closes.
 - `done` stays in `TaskStatus` for plain chats only (Mark done). Role tasks never get it.
@@ -237,7 +240,8 @@ count includes them.
   `pass` on the task's current checkpoint, the server approves the task and, with a managed baseline, integrates it exactly as the
   owner's Preview integration → Approve would, once no agent runs in the project (queued work there holds until it lands). A
   `changes` verdict sends the findings back to the author automatically, at most 3 times in a row. A failed integration (conflict,
-  oversized diff, blocker) leaves the task in `needs_review` with a notice for the owner.
+  oversized diff, blocker) leaves the task in `needs_review` with a notice for the owner. A task whose prerequisite is not accepted
+  yet is not attempted; it is delivered once the prerequisite clears.
 
 Implemented as project settings `autoReview`, `autoContinueSteps` (0 to 20, 0 is off), `startNextWhenIdle` and `autoApprove`. The
 count of automatic continues and fixes lives on the task (`autoContinues`) and resets whenever the owner sends a message or moves the
