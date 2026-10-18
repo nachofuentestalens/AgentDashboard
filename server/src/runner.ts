@@ -131,6 +131,7 @@ export class Runner {
   private readonly integratedCache = new Map<string, boolean>();
   private tickPending = false;
   private tickAgain = false;
+  private syncingGithub = false;
   private closed = false;
   private readonly recheck: NodeJS.Timeout;
   replies: ReplyHandler | null = null;
@@ -154,7 +155,10 @@ export class Runner {
       const ids = new Set(this.readEvents(run.id).flatMap(({ event }) => (event.kind === "tool_use" ? [event.id] : [])));
       this.store.setToolCalls(run.id, ids.size);
     }
-    this.recheck = setInterval(() => this.tick(), RECHECK_MS);
+    this.recheck = setInterval(() => {
+      this.tick();
+      void this.syncGithubMerges();
+    }, RECHECK_MS);
     this.recheck.unref();
   }
 
@@ -476,6 +480,27 @@ export class Runner {
       throw new RunnerError((error as Error).message, 409);
     } finally {
       this.workspaceBusy.delete(taskId);
+    }
+  }
+
+  async syncGithubMerges(): Promise<void> {
+    if (this.closed || this.restartHeld || this.syncingGithub) return;
+    this.syncingGithub = true;
+    try {
+      for (const w of this.store.workspacesAwaitingMerge()) {
+        if (this.closed || this.restartHeld) break;
+        const task = this.store.getTask(w.taskId);
+        if (!task || this.isTaskRunning(w.taskId) || this.isProjectBusy(task.projectId)) continue;
+        // Share the publication lock so a pending push cannot overwrite the observed merge.
+        this.workspaceBusy.add(w.taskId);
+        try {
+          if (await this.github.syncMerge(w.taskId)) this.publishTask(this.store.getTask(w.taskId));
+        } finally {
+          this.workspaceBusy.delete(w.taskId);
+        }
+      }
+    } finally {
+      this.syncingGithub = false;
     }
   }
 

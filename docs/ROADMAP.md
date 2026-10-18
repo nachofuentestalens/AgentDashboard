@@ -72,6 +72,7 @@ Demo checklist (real Claude Code, on Windows):
   - [x] Persistent task worktrees, isolated runner/reviews, local end-of-run checkpoints and Pause & checkpoint UI; [recovery and rollout](WORKSPACES.md)
   - [x] GitHub checkpoint pushes and draft PRs, exact-commit approval/check gating and owner-triggered squash merge; manual deploy/revert instructions
   - [x] Outcome-based checkpoint, PR, squash and integration titles from final run summaries, with changed-file fallbacks
+  - [x] Periodically synchronize PRs merged directly on GitHub and refresh dashboard badges while preserving local work
   - [ ] Automatic conflict resolution and worktree cleanup; lift department concurrency limits after integration
 - [ ] Templates: Feature, Bugfix, Balance pass, Content batch; save your own
 - [ ] Promote a chat to a workflow

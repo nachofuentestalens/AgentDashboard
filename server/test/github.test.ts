@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Runner } from "../src/runner.ts";
 import type { App } from "../src/app.ts";
 import { Github, githubRepository } from "../src/github.ts";
 import { git as realGit } from "../src/git.ts";
@@ -9,6 +10,8 @@ import { api, git, gitRepo, newProject, newTask, tempDir, testApp } from "./help
 
 let app: App | null = null;
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   await app?.close();
   app = null;
 });
@@ -32,16 +35,18 @@ async function fixture() {
     remote: "https://github.com/owner/game.git",
     existing: false,
     merged: false,
+    mergeCommit: "abc1234" as string | null,
+    closed: false,
     sha: saved.checkpointCommit!,
   };
   const pull = () => ({
     number: 12,
     node_id: "PR_node",
     html_url: "https://github.com/owner/game/pull/12",
-    state: "open",
+    state: state.closed ? "closed" : "open",
     draft: true,
     merged: state.merged,
-    merge_commit_sha: state.merged ? "abc1234" : null,
+    merge_commit_sha: state.merged ? state.mergeCommit : null,
     head: { sha: state.sha, ref: w.branch, repo: { full_name: "owner/game" } },
     base: { ref: "main", repo: { full_name: "owner/game" } },
   });
@@ -163,5 +168,130 @@ describe("GitHub checkpoint publication", () => {
     expect(result?.mergeCommit).toBe("abc1234");
     expect(result?.publishError).toContain("already merged");
     expect(f.pushes).toHaveLength(1);
+  });
+
+  it("observes an external merge without touching dirty local work or requiring the current checkpoint head", async () => {
+    const f = await fixture();
+    await f.github.publish(f.task.id);
+    fs.writeFileSync(path.join(f.w.path, "work.txt"), "local edits");
+    fs.writeFileSync(path.join(f.w.path, "untracked.txt"), "keep me");
+    const before = f.instance.store.getWorkspace(f.task.id)!;
+    f.instance.store.saveWorkspace({ ...before, error: "local checkpoint error", publishError: "old publication failure" });
+    const status = git(f.w.path, "status", "--porcelain");
+    f.state.sha = "f".repeat(40);
+    f.state.merged = true;
+    f.state.closed = true;
+    f.calls.length = 0;
+    expect(await f.github.syncMerge(f.task.id)).toBe(true);
+    expect(f.instance.store.getWorkspace(f.task.id)).toEqual({ ...before, error: "local checkpoint error", publishError: null, mergeCommit: "abc1234" });
+    expect(f.calls).toEqual([{ endpoint: "/repos/owner/game/pulls/12", method: "GET", body: undefined }]);
+    expect(git(f.w.path, "status", "--porcelain")).toBe(status);
+    expect(fs.readFileSync(path.join(f.w.path, "work.txt"), "utf8")).toBe("local edits");
+    expect(fs.readFileSync(path.join(f.w.path, "untracked.txt"), "utf8")).toBe("keep me");
+    expect(f.pushes).toHaveLength(1);
+    expect(f.instance.store.workspacesAwaitingMerge()).toHaveLength(0);
+    expect(await f.github.syncMerge(f.task.id)).toBe(false);
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it("keeps state for open, closed-unmerged, failed and incomplete API responses, then retries", async () => {
+    const f = await fixture();
+    expect(await f.github.syncMerge(f.task.id)).toBe(false);
+    expect(f.calls).toHaveLength(0);
+    await f.github.publish(f.task.id);
+    const before = { ...f.instance.store.getWorkspace(f.task.id)!, publishError: "keep existing error" };
+    f.instance.store.saveWorkspace(before);
+    expect(await f.github.syncMerge(f.task.id)).toBe(false);
+    f.state.closed = true;
+    expect(await f.github.syncMerge(f.task.id)).toBe(false);
+    f.state.apiFails = true;
+    expect(await f.github.syncMerge(f.task.id)).toBe(false);
+    f.state.apiFails = false;
+    f.state.merged = true;
+    f.state.mergeCommit = null;
+    expect(await f.github.syncMerge(f.task.id)).toBe(false);
+    expect(f.instance.store.getWorkspace(f.task.id)).toEqual(before);
+    f.state.mergeCommit = "abc1234";
+    expect(await f.github.syncMerge(f.task.id)).toBe(true);
+  });
+
+  it("does not overwrite newer workspace metadata or save an in-flight response after shutdown", async () => {
+    const f = await fixture();
+    await f.github.publish(f.task.id);
+    let available = true;
+    let respond!: (value: unknown) => void;
+    const github = new Github(
+      f.instance.store,
+      {} as Workspaces,
+      () => available,
+      () =>
+        new Promise((resolve) => {
+          respond = resolve;
+        }),
+    );
+    const pending = github.syncMerge(f.task.id);
+    const current = { ...f.instance.store.getWorkspace(f.task.id)!, checkpointCommit: "e".repeat(40), error: "new error" };
+    f.instance.store.saveWorkspace(current);
+    respond({ merged: true, merge_commit_sha: "abc1234" });
+    expect(await pending).toBe(true);
+    expect(f.instance.store.getWorkspace(f.task.id)).toEqual({ ...current, mergeCommit: "abc1234" });
+    f.instance.store.saveWorkspace(current);
+    const stopped = github.syncMerge(f.task.id);
+    available = false;
+    respond({ merged: true, merge_commit_sha: "abc1234" });
+    expect(await stopped).toBe(false);
+    expect(f.instance.store.getWorkspace(f.task.id)).toEqual(current);
+  });
+
+  it("polls on the runner timer and emits a task refresh once, then stops on close", async () => {
+    const f = await fixture();
+    await f.github.publish(f.task.id);
+    f.state.merged = true;
+    const sync = f.github.syncMerge.bind(f.github);
+    const spy = vi.spyOn(Github.prototype, "syncMerge").mockImplementation(sync);
+    const events: string[] = [];
+    const off = f.instance.bus.subscribe((event) => events.push(event.type));
+    vi.useFakeTimers();
+    const runner = new Runner(f.instance.store, f.instance.bus, f.instance.dataDir);
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.instance.store.getWorkspace(f.task.id)?.mergeCommit).toBe("abc1234");
+      expect(events.filter((type) => type === "task_updated")).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(spy).toHaveBeenCalledTimes(1);
+      runner.close();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      runner.close();
+      off();
+    }
+  });
+
+  it("skips busy tasks and prevents overlapping polls while allowing other PRs after API failures", async () => {
+    const f = await fixture();
+    await f.github.publish(f.task.id);
+    const other = await newTask(f.instance, f.task.projectId);
+    f.instance.store.saveWorkspace({ ...f.instance.store.getWorkspace(f.task.id)!, taskId: other.id });
+    const busy = vi.spyOn(f.instance.runner, "isTaskRunning").mockImplementation((id) => id === f.task.id);
+    const read = f.github.syncMerge.bind(f.github);
+    let respond!: (value: boolean) => void;
+    const sync = vi.spyOn(Github.prototype, "syncMerge").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          respond = resolve;
+        }),
+    );
+    const pending = f.instance.runner.syncGithubMerges();
+    await f.instance.runner.syncGithubMerges();
+    expect(sync.mock.calls).toEqual([[other.id]]);
+    respond(false);
+    await pending;
+    busy.mockRestore();
+    sync.mockImplementation(read);
+    f.state.apiFails = true;
+    await f.instance.runner.syncGithubMerges();
+    expect(f.calls.slice(-2).map((c) => c.endpoint)).toEqual(["/repos/owner/game/pulls/12", "/repos/owner/game/pulls/12"]);
+    expect(f.instance.runner.isTaskRunning(other.id)).toBe(false);
   });
 });

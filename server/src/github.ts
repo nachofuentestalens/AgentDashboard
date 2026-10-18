@@ -1,5 +1,5 @@
 import type { TaskWorkspace } from "@ad/shared";
-import { git } from "./git.ts";
+import { COMMIT_ID, git } from "./git.ts";
 import { checkpointTitle } from "./commit-summary.ts";
 import type { Store } from "./store.ts";
 import type { Workspaces } from "./workspaces.ts";
@@ -68,6 +68,27 @@ export class Github {
 
   private save(w: TaskWorkspace) {
     if (this.available()) this.store.saveWorkspace(w);
+  }
+
+  async syncMerge(taskId: string): Promise<boolean> {
+    if (!this.available()) return false;
+    const w = this.store.getWorkspace(taskId);
+    if (!w?.githubRepo || !w.pullRequestUrl || w.mergeCommit) return false;
+    const match = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)$/.exec(w.pullRequestUrl);
+    if (!match || match[1]!.toLowerCase() !== w.githubRepo.toLowerCase()) return false;
+    try {
+      const pull = (await this.api(w.path, w.githubRepo, `/repos/${w.githubRepo}/pulls/${match[2]}`)) as Pull;
+      if (!this.available()) return false;
+      if (pull.merged !== true || !pull.merge_commit_sha || !COMMIT_ID.test(pull.merge_commit_sha)) return false;
+      // Observe the pinned PR even if local work has advanced or its branch was deleted on GitHub.
+      const current = this.store.getWorkspace(taskId);
+      if (!current || current.mergeCommit || current.githubRepo !== w.githubRepo || current.pullRequestUrl !== w.pullRequestUrl) return false;
+      this.save({ ...current, mergeCommit: pull.merge_commit_sha, publishError: null });
+      return true;
+    } catch {
+      // A failed background read is not a publication failure. Keep state and retry next pass.
+      return false;
+    }
   }
 
   private async repository(w: TaskWorkspace): Promise<string | null> {
