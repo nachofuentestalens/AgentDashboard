@@ -40,6 +40,7 @@ import type { Store } from "./store.ts";
 import { efficiencyInstructions, extractHandoff, HANDOFF_REQUEST, totalTokens } from "./efficiency.ts";
 import { modelRoutingInstructions, parseModelReview, validateModelReview } from "./model-routing.ts";
 import { Workspaces } from "./workspaces.ts";
+import { WorkspaceCleanup } from "./workspace-cleanup.ts";
 import { Github } from "./github.ts";
 import { baselineBlocker } from "./readiness.ts";
 
@@ -435,6 +436,25 @@ export class Runner {
 
   stopAll(): void {
     for (const runId of this.active.keys()) this.stop(runId);
+  }
+
+  previewWorkspaceCleanup(taskId: string) {
+    const task = this.store.getTask(taskId);
+    return new WorkspaceCleanup(this.store, this.workspaces).preview(taskId, this.isTaskRunning(taskId) || !!(task && this.isProjectBusy(task.projectId)));
+  }
+
+  async cleanupWorkspace(taskId: string) {
+    const task = this.requireIdleTask(taskId);
+    return this.deliveryOperation(task.projectId, async () => {
+      this.workspaceBusy.add(taskId);
+      try {
+        return await new WorkspaceCleanup(this.store, this.workspaces).remove(taskId);
+      } catch (error) {
+        throw new RunnerError((error as Error).message, 409);
+      } finally {
+        this.workspaceBusy.delete(taskId);
+      }
+    });
   }
 
   async checkpointTask(taskId: string) {

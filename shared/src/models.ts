@@ -252,6 +252,14 @@ export interface Message {
   createdAt: string;
 }
 
+export interface WorkspaceCleanupPreview {
+  taskId: string;
+  path: string | null;
+  eligible: boolean;
+  reasons: string[];
+  evidence: string | null;
+}
+
 export interface TaskWorkspace {
   taskId: string;
   repoPath: string;

@@ -140,12 +140,14 @@ describe("GitHub checkpoint publication", () => {
     f.state.check = "failure";
     await expect(f.github.merge(f.task.id)).rejects.toThrow("successful GitHub checks");
     expect(f.calls.some((c) => c.endpoint.endsWith("/merge"))).toBe(false);
+    expect(f.instance.store.getStateJson(`verified-merge.${f.task.id}`)).toBeNull();
     f.state.check = "success";
     f.state.sha = "f".repeat(40);
     await expect(f.github.merge(f.task.id)).rejects.toThrow("no longer matches");
     f.state.sha = f.saved.checkpointCommit!;
     const merged = await f.github.merge(f.task.id);
     expect(merged.mergeCommit).toBe("abc1234");
+    expect(f.instance.store.getStateJson(`verified-merge.${f.task.id}`)).toEqual({ checkpoint: f.saved.checkpointCommit, merge: "abc1234" });
     expect(f.calls.find((c) => c.endpoint.endsWith("/merge"))?.body).toEqual({
       sha: f.saved.checkpointCommit,
       merge_method: "squash",
@@ -162,6 +164,7 @@ describe("GitHub checkpoint publication", () => {
     const result = await f.github.publish(f.task.id);
     expect(result?.mergeCommit).toBe("abc1234");
     expect(result?.publishError).toContain("already merged");
+    expect(f.instance.store.getStateJson(`verified-merge.${f.task.id}`)).toBeNull();
     expect(f.pushes).toHaveLength(1);
   });
 });

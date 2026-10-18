@@ -1,4 +1,5 @@
 import type {
+  WorkspaceCleanupPreview,
   RestartStatus,
   BaselinePreview,
   DeliveryView,
@@ -95,6 +96,9 @@ export const api = {
   tasks: (projectId: string) => request<TaskSummary[]>("GET", `/api/projects/${projectId}/tasks`),
   task: (id: string) => request<TaskDetail>("GET", `/api/tasks/${id}`),
   checkpointTask: (id: string) => request<TaskWorkspace>("POST", `/api/tasks/${id}/checkpoint`),
+  previewWorkspaceCleanup: (id: string) => request<WorkspaceCleanupPreview>("GET", `/api/tasks/${id}/workspace-cleanup`),
+  previewProjectCleanup: (id: string) => request<(WorkspaceCleanupPreview & { title: string })[]>("GET", `/api/projects/${id}/workspace-cleanup`),
+  cleanupWorkspace: (id: string) => request<WorkspaceCleanupPreview>("POST", `/api/tasks/${id}/workspace-cleanup`),
   publishTask: (id: string) => request<TaskWorkspace>("POST", `/api/tasks/${id}/publish`),
   mergeTask: (id: string) => request<TaskWorkspace>("POST", `/api/tasks/${id}/merge`),
   prepareHandoff: (id: string) => request<{ message: Message; run: Run }>("POST", `/api/tasks/${id}/prepare-handoff`),
