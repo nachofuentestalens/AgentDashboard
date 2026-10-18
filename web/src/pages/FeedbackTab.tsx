@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router";
 import type { FeedbackStatus, Project } from "@ad/shared";
 import { api, keys } from "../api.ts";
 import { Button, ErrorNote, inputClass, selectClass } from "../components/ui.tsx";
+import { useDraft } from "../drafts.ts";
 import { ago } from "../format.ts";
 import { RoleSelect, useRoles } from "./ProjectPage.tsx";
 
@@ -24,7 +25,7 @@ export function FeedbackTab({ project }: { project: Project }) {
   const navigate = useNavigate();
   const items = useQuery({ queryKey: keys.feedback(project.id), queryFn: () => api.feedback(project.id) });
   const roles = useRoles(project.id);
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`feedback:${project.id}`);
   const [source, setSource] = useState("");
   const [filter, setFilter] = useState<FeedbackStatus | "all">("new");
   const [selected, setSelected] = useState<Set<string>>(new Set());
