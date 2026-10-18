@@ -360,6 +360,7 @@ export function TaskPage() {
         )}
         <ErrorNote error={send.error ?? update.error ?? remove.error} />
         <Composer
+          draftKey={`task:${task.id}`}
           placeholder={
             running
               ? "The agent is working. You can type your next message meanwhile."

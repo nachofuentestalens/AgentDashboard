@@ -39,7 +39,7 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
 ## Testing
 
 - `pnpm test` (vitest): parser/transcript units and API tests in `server/test/` that drive the real runner with the fake agent. Add a scenario keyword to `fake-claude.mjs` when a test needs new agent behaviour.
-- `pnpm test:e2e` (Playwright): run after UI changes. With a preinstalled Chromium (a cloud container, or Chrome/Edge on Windows), set `PW_CHROMIUM` to its executable instead of installing browsers.
+- `pnpm test:e2e` (Playwright): run after UI changes. With a preinstalled Chromium (a cloud container, or Chrome/Edge on Windows), set `PW_CHROMIUM` to its executable instead of installing browsers. Set `E2E_PORT` when another worktree already runs the suite on the default 5199.
 - `pnpm validate` before reporting work as done. CI runs it on Windows and Linux.
 - Formatting: Prettier (`pnpm format`), print width 160.
 

@@ -6,6 +6,7 @@ import { api, keys } from "../api.ts";
 import { Markdown } from "../components/Markdown.tsx";
 import { StageActions } from "../components/StageActions.tsx";
 import { Button, ErrorNote, inputClass, PriorityBadge, PrioritySelect, Toggle } from "../components/ui.tsx";
+import { useDraft } from "../drafts.ts";
 import { ago } from "../format.ts";
 import { RoleSelect } from "./ProjectPage.tsx";
 
@@ -97,9 +98,9 @@ function From({ project, task, taskId, role }: { project: string; task?: string;
 }
 
 function QuestionCard({ q }: { q: InboxQuestion }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`answer:${q.task.id}`);
   const [record, setRecord] = useState(true);
-  const answer = useMutation({ mutationFn: () => api.answer(q.task.id, text.trim(), record) });
+  const answer = useMutation({ mutationFn: () => api.answer(q.task.id, text.trim(), record), onSuccess: () => setText("") });
   return (
     <article className={card} aria-label={`Question from ${q.task.title}`}>
       <From project={q.projectName} task={q.task.title} taskId={q.task.id} />

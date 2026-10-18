@@ -118,6 +118,7 @@ function TasksTab({ project }: { project: Project }) {
       <section>
         <h2 className="mb-2 text-sm font-semibold text-ink-200">{role ? `New task for ${role.name}` : "New chat"}</h2>
         <Composer
+          draftKey={`new:${project.id}`}
           placeholder={
             role
               ? `Brief the ${role.name}: what to do, why, and what done looks like. Its agents pick tasks up by priority.`

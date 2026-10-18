@@ -45,10 +45,18 @@ test("create a project, chat with the agent, resume, stop and retry", async ({ p
   await expect(page.getByRole("button", { name: "↻ Retry" })).toBeVisible();
 
   // The task shows up in the project's list with its cost.
+  // Unsent text survives switching between the task and the project.
+  await page.getByRole("textbox", { name: "Message" }).fill("Half-written reply");
   await page.getByRole("navigation").getByRole("link", { name: "Idle Quest" }).click();
   await expect(page.getByRole("heading", { name: "New chat" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("");
+  await page.getByRole("textbox", { name: "Message" }).fill("Half-written brief");
   await expect(page.getByRole("link", { name: /Design three starter classes/ })).toBeVisible();
   await page.screenshot({ path: "test-results/tasks.png" });
+  await page.getByRole("link", { name: /Design three starter classes/ }).click();
+  await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("Half-written reply");
+  await page.getByRole("navigation").getByRole("link", { name: "Idle Quest" }).click();
+  await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("Half-written brief");
 });
 
 test("settings find the demo agent", async ({ page }) => {
