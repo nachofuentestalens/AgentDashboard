@@ -5,13 +5,20 @@ import { api, keys } from "../api.ts";
 import { Markdown } from "../components/Markdown.tsx";
 import { Button, ErrorNote, inputClass } from "../components/ui.tsx";
 import { ago } from "../format.ts";
+import { useStoredDraft } from "../drafts.ts";
+
+// `base` is the content the edit started from: it tells unsaved changes apart and spots edits made meanwhile by agents.
+type DocDraft = { path: string; content: string; isNew: boolean; base: string };
+
+const dirty = (d: DocDraft) => d.content !== d.base || (d.isNew && d.path !== "design/");
 
 export function DocsTab({ project }: { project: Project }) {
   const docs = useQuery({ queryKey: keys.docs(project.id), queryFn: () => api.docs(project.id) });
   const studio = useQuery({ queryKey: keys.studio(project.id), queryFn: () => api.studio(project.id) });
   const [selected, setSelected] = useState<string | null>(null);
-  const [draft, setDraft] = useState<{ path: string; content: string; isNew: boolean } | null>(null);
-  const current = selected ?? docs.data?.[0]?.path ?? null;
+  // One open editor per project, kept across tabs, projects and reloads until saved or cancelled.
+  const [draft, setDraft] = useStoredDraft<DocDraft>(`doc:${project.id}`);
+  const current = (draft && !draft.isNew ? draft.path : selected) ?? docs.data?.[0]?.path ?? null;
   const detail = useQuery({ queryKey: keys.doc(project.id, current ?? ""), queryFn: () => api.doc(project.id, current!), enabled: !!current && !draft?.isNew });
   const save = useMutation({
     mutationFn: (d: { path: string; content: string }) => api.saveDoc(project.id, d.path, d.content),
@@ -20,6 +27,9 @@ export function DocsTab({ project }: { project: Project }) {
       setDraft(null);
     },
   });
+  // Switching documents closes the editor: ask before throwing away typed changes.
+  const leaveDraft = () => !draft || !dirty(draft) || confirm(`Discard your unsaved changes to ${draft.path}?`);
+  const changedMeanwhile = draft && !draft.isNew && detail.data?.doc.path === draft.path && detail.data.content !== draft.base;
   const deptName = (id: string | null) => studio.data?.departments.find((d) => d.id === id)?.name;
   const deptColor = (id: string | null) => studio.data?.departments.find((d) => d.id === id)?.color;
 
@@ -28,7 +38,11 @@ export function DocsTab({ project }: { project: Project }) {
       <aside className="w-72 shrink-0 overflow-y-auto border-r border-ink-800 px-3 py-4">
         <div className="mb-2 flex items-center justify-between px-1">
           <span className="text-[11px] font-semibold tracking-wider text-ink-400 uppercase">design/</span>
-          <Button variant="ghost" className="!px-2 !py-0.5 text-xs" onClick={() => setDraft({ path: "design/", content: "# Title\n\n", isNew: true })}>
+          <Button
+            variant="ghost"
+            className="!px-2 !py-0.5 text-xs"
+            onClick={() => leaveDraft() && setDraft({ path: "design/", content: "# Title\n\n", isNew: true, base: "# Title\n\n" })}
+          >
             + New
           </Button>
         </div>
@@ -40,6 +54,8 @@ export function DocsTab({ project }: { project: Project }) {
             <li key={doc.path}>
               <button
                 onClick={() => {
+                  if (draft && !draft.isNew && draft.path === doc.path) return;
+                  if (!leaveDraft()) return;
                   setSelected(doc.path);
                   setDraft(null);
                 }}
@@ -77,6 +93,11 @@ export function DocsTab({ project }: { project: Project }) {
             ) : (
               <p className="font-mono text-xs text-ink-400">{draft.path}</p>
             )}
+            {changedMeanwhile && (
+              <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                This document changed since you started editing. Saving replaces those changes with yours.
+              </p>
+            )}
             <textarea
               aria-label="Document content"
               className={`${inputClass} min-h-[60vh] font-mono text-xs leading-relaxed`}
@@ -88,7 +109,7 @@ export function DocsTab({ project }: { project: Project }) {
               <Button type="submit" variant="primary" disabled={save.isPending}>
                 Save and commit
               </Button>
-              <Button onClick={() => setDraft(null)}>Cancel</Button>
+              <Button onClick={() => (!dirty(draft) || confirm("Discard your unsaved changes?")) && setDraft(null)}>Cancel</Button>
             </div>
           </form>
         ) : detail.data ? (
@@ -97,7 +118,10 @@ export function DocsTab({ project }: { project: Project }) {
               <span className="font-mono text-xs text-ink-400">{detail.data.doc.path}</span>
               {deptName(detail.data.doc.departmentId) && <span className="text-xs text-ink-300">owned by {deptName(detail.data.doc.departmentId)}</span>}
               {detail.data.doc.path !== "design/decisions.md" && (
-                <Button className="ml-auto text-xs" onClick={() => setDraft({ path: detail.data!.doc.path, content: detail.data!.content, isNew: false })}>
+                <Button
+                  className="ml-auto text-xs"
+                  onClick={() => setDraft({ path: detail.data!.doc.path, content: detail.data!.content, isNew: false, base: detail.data!.content })}
+                >
                   Edit
                 </Button>
               )}

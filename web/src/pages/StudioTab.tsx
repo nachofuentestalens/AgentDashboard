@@ -15,6 +15,7 @@ import {
   type UpdateRoleBody,
 } from "@ad/shared";
 import { api, keys } from "../api.ts";
+import { useStoredDraft } from "../drafts.ts";
 import { Button, Dialog, ErrorNote, Field, inputClass, selectClass, Toggle } from "../components/ui.tsx";
 import { cost, modelLabel } from "../format.ts";
 
@@ -281,6 +282,19 @@ const lines = (text: string) =>
     .map((l) => l.trim())
     .filter(Boolean);
 
+type RoleForm = {
+  name: string;
+  dept: string;
+  provider: Provider | "";
+  model: string;
+  effort: Effort | "";
+  canEdit: boolean;
+  tools: string;
+  docs: string;
+  brief: string;
+  reviewer: string;
+};
+
 function RoleEditor({
   project,
   departments,
@@ -294,17 +308,37 @@ function RoleEditor({
   departmentId: string;
   onClose: () => void;
 }) {
-  const [name, setName] = useState(role?.name ?? "");
   const catalog = useModelCatalog();
-  const [dept, setDept] = useState(role?.departmentId ?? departmentId);
-  const [provider, setProvider] = useState<Provider | "">(role?.provider ?? "");
-  const [model, setModel] = useState(role?.model ?? "");
-  const [effort, setEffort] = useState<Effort | "">(role?.effort ?? "");
-  const [canEdit, setCanEdit] = useState(role?.canEdit ?? true);
-  const [tools, setTools] = useState(role?.allowedTools?.join("\n") ?? "");
-  const [docs, setDocs] = useState(role?.contextDocs.join("\n") ?? "");
-  const [brief, setBrief] = useState(role?.brief ?? "");
-  const [reviewer, setReviewer] = useState(role?.reviewerRoleId ?? "");
+  // Closing the dialog (Escape, a click outside, leaving the tab) keeps the edits; Cancel, save and remove drop them.
+  const [stored, setStored] = useStoredDraft<RoleForm>(role ? `role:${role.id}` : `role-new:${departmentId}`);
+  const [restored] = useState(stored !== null);
+  const form: RoleForm = stored ?? {
+    name: role?.name ?? "",
+    dept: role?.departmentId ?? departmentId,
+    provider: role?.provider ?? "",
+    model: role?.model ?? "",
+    effort: role?.effort ?? "",
+    canEdit: role?.canEdit ?? true,
+    tools: role?.allowedTools?.join("\n") ?? "",
+    docs: role?.contextDocs.join("\n") ?? "",
+    brief: role?.brief ?? "",
+    reviewer: role?.reviewerRoleId ?? "",
+  };
+  const { name, dept, provider, model, effort, canEdit, tools, docs, brief, reviewer } = form;
+  const set = (patch: Partial<RoleForm>) => setStored({ ...form, ...patch });
+  const setName = (v: string) => set({ name: v });
+  const setDept = (v: string) => set({ dept: v });
+  const setModel = (v: string) => set({ model: v });
+  const setEffort = (v: Effort | "") => set({ effort: v });
+  const setCanEdit = (v: boolean) => set({ canEdit: v });
+  const setTools = (v: string) => set({ tools: v });
+  const setDocs = (v: string) => set({ docs: v });
+  const setBrief = (v: string) => set({ brief: v });
+  const setReviewer = (v: string) => set({ reviewer: v });
+  const finish = () => {
+    setStored(null);
+    onClose();
+  };
 
   const body = (): UpdateRoleBody => ({
     reviewerRoleId: reviewer || null,
@@ -320,9 +354,9 @@ function RoleEditor({
   });
   const save = useMutation({
     mutationFn: () => (role ? api.updateRole(role.id, body()) : api.createRole(project.id, { ...body(), departmentId: dept, name: name.trim() })),
-    onSuccess: onClose,
+    onSuccess: finish,
   });
-  const remove = useMutation({ mutationFn: () => api.deleteRole(role!.id), onSuccess: onClose });
+  const remove = useMutation({ mutationFn: () => api.deleteRole(role!.id), onSuccess: finish });
   const effortCost = (level: Effort): ReactNode => {
     const c = role?.costByEffort[level];
     return c ? ` · avg ${cost(c.avgUsd)}/task over ${c.runs}` : "";
@@ -337,6 +371,14 @@ function RoleEditor({
           save.mutate();
         }}
       >
+        {restored && stored && (
+          <p className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            Restored your unsaved changes.
+            <Button variant="ghost" className="ml-auto !px-2 !py-0.5 text-xs" onClick={() => setStored(null)}>
+              Discard them
+            </Button>
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <Field label="Name" hint="Agents use this exact name to ask this role for work.">
             <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} required />
@@ -355,11 +397,7 @@ function RoleEditor({
               aria-label="Role provider"
               className={inputClass}
               value={provider}
-              onChange={(e) => {
-                setProvider(e.target.value as Provider | "");
-                setModel("");
-                setEffort("");
-              }}
+              onChange={(e) => set({ provider: e.target.value as Provider | "", model: "", effort: "" })}
             >
               <option value="">Project default</option>
               {PROVIDERS.map((p) => (
@@ -426,7 +464,7 @@ function RoleEditor({
           <Button type="submit" variant="primary" disabled={save.isPending || !name.trim()}>
             {role ? "Save role" : "Add role"}
           </Button>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={() => (!stored || confirm("Discard your unsaved changes?")) && finish()}>Cancel</Button>
           {role && (
             <Button variant="danger" className="ml-auto" onClick={() => confirm(`Remove the ${role.name} role and its agents?`) && remove.mutate()}>
               Remove role
