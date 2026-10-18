@@ -239,6 +239,7 @@ export class Github {
       });
       if (!merged.merged) throw new Error("GitHub did not merge the pull request. Resolve conflicts or branch requirements on GitHub.");
       w.mergeCommit = merged.sha;
+      this.store.setStateJson(`verified-merge.${taskId}`, { checkpoint: w.checkpointCommit, merge: merged.sha });
       w.publishError = null;
     } catch (error) {
       w.publishError = (error as Error).message;

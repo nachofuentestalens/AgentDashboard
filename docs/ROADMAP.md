@@ -73,7 +73,8 @@ Demo checklist (real Claude Code, on Windows):
   - [x] GitHub checkpoint pushes and draft PRs, exact-commit approval/check gating and owner-triggered squash merge; manual deploy/revert instructions
   - [x] Outcome-based checkpoint, PR, squash and integration titles from final run summaries, with changed-file fallbacks
   - [x] Periodically synchronize PRs merged directly on GitHub and refresh dashboard badges while preserving local work
-  - [ ] Automatic conflict resolution and worktree cleanup; lift department concurrency limits after integration
+  - [x] Owner-triggered worktree cleanup preview with Git delivery verification, refusal checks and retained recovery references
+  - [ ] Automatic conflict resolution; lift department concurrency limits after integration (scheduled cleanup remains out of scope)
 - [ ] Templates: Feature, Bugfix, Balance pass, Content batch; save your own
 - [ ] Promote a chat to a workflow
 - [ ] Review by the reporting line: a role's proposals against another department's documents are reviewed by that department's lead before they reach the owner

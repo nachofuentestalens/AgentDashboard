@@ -36,4 +36,27 @@ The runner checks tracked PRs without a recorded merge every minute, including a
 
 An existing dirty installation can still start isolated writing tasks (so the dashboard can fix itself), but they branch from the last commit. Commit changes the agent should build on; nothing is discarded or stashed automatically.
 
-Tests in `server/test/workspaces.test.ts` cover primary checkout preservation, added/deleted/ignored files, stopped runs, restart reuse, dirty checkouts starting from the last commit, review isolation and wrong-branch recovery. `server/test/github.test.ts` uses a simulated GitHub API to cover exact-commit pushes, publication retry/failure, remote pinning, merge checks and externally merged PRs without network side effects. The chat e2e covers workspace status and Pause & checkpoint.
+## Owner-triggered cleanup
+
+On a task page, **Preview project worktree cleanup** lists the project's recorded worktrees, their paths, delivery evidence, and blocking reasons. **Remove eligible worktree** removes only the selected folder. Preview does not remove files. There is no scheduled cleanup or branch deletion.
+
+`server/src/workspace-cleanup.ts` implements the checks; the runner holds its project delivery and task workspace locks during removal so sends, scheduling, checkpoints, deletion, and other delivery operations cannot race it. Both the task and recorded runs must be inactive and unqueued. Plain chats must be done; role tasks must be approved or closed, with no unfinished next step. Completion alone never proves delivery:
+
+- HEAD must equal the successfully recorded checkpoint on the recorded task branch in the original repository.
+- The exact checkpoint must be approved and a Git ancestor of the recorded approved project baseline; alternatively, a dashboard GitHub merge must have recorded successful check verification for that exact checkpoint and merge SHA. For squash delivery, Git reconstructs the merge tree from the delivered commit's parent and the checkpoint and compares it with the delivered tree.
+- Old/external GitHub merges without recorded verification remain blocked. Missing local merge objects remain blocked; fetch the delivery commit through normal Git workflow before previewing again. Cleanup does not fetch or trust a task's merged label as proof.
+- Active/queued tasks, changed or uncheckpointed commits, unmerged or unverified delivery, dirty indexes/files, untracked **and ignored** files, unresolved conflicts, unfinished Git operations, locked worktrees, the live project checkout, and the worktree executing the server are blocked. Ignored dependencies/configuration must be deliberately dealt with before cleanup, so local configuration is not silently lost.
+
+Eligibility is freshly checked before removal, including another check after creating `refs/agentdashboard/recovery/<task-id>/<checkpoint-sha>`. Removal uses only `git worktree remove` without force; Git refusal leaves the folder in place. External Git processes are outside the runner lock: avoid editing a candidate while cleanup runs. Git's own removal checks remain enabled.
+
+Chat history, append-only run logs, workspace/checkpoint/approval/publication metadata, the task branch, and recovery refs are retained. A cleanup audit in the store records the timestamp, checkpoint and delivery evidence; an absent folder is shown as absent rather than assumed safe. Reopen the existing chat at any time to read its history. To reopen the exact checkout, use the recorded path and branch:
+
+```text
+git -C "<recorded-repository>" worktree add "<recorded-worktree-path>" "<recorded-task-branch>"
+```
+
+If the branch was manually removed later, recreate it from the retained recovery ref before adding the worktree. Normal workspace preparation can also recreate an absent folder from its branch, but existing approval/baseline rules still apply: create a new task for changes after delivery. Cleanup never deletes recovery refs or branches and never deploys to the live checkout.
+
+API: `GET /api/projects/:id/workspace-cleanup` previews every recorded worktree in a project; `GET /api/tasks/:id/workspace-cleanup` previews one; `POST /api/tasks/:id/workspace-cleanup` is the explicit owner removal action and returns 409 on refusal. A stale preview never authorizes removal.
+
+Tests in `server/test/workspaces.test.ts` cover primary checkout preservation, added/deleted/ignored files, stopped runs, restart reuse, dirty checkouts starting from the last commit, review isolation and wrong-branch recovery. `server/test/workspace-cleanup.test.ts` uses temporary repositories for eligible delivery, refusal cases, concurrency, last-moment changes, retained references and reopening. `server/test/github.test.ts` uses a simulated GitHub API to cover exact-commit pushes, publication retry/failure, remote pinning, merge checks and externally merged PRs without network side effects. The chat e2e covers workspace status, cleanup preview and Pause & checkpoint.

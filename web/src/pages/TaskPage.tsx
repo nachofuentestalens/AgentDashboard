@@ -70,6 +70,14 @@ export function TaskPage() {
       void qc.invalidateQueries({ queryKey: ["tasks"] });
     },
   });
+  const cleanupPreview = useMutation({ mutationFn: () => api.previewProjectCleanup(detail.data!.task.projectId) });
+  const cleanup = useMutation({
+    mutationFn: (id: string) => api.cleanupWorkspace(id),
+    onSettled: () => {
+      cleanupPreview.mutate();
+      void qc.invalidateQueries({ queryKey: keys.task(taskId) });
+    },
+  });
 
   // Follow the stream while the reader is at the bottom; leave them alone if they scrolled up.
   const scroller = useRef<HTMLDivElement>(null);
@@ -189,6 +197,39 @@ export function TaskPage() {
           {detail.data.workspace && (
             <>
               <p className="break-all text-ink-400">{detail.data.workspace.path}</p>
+              <Button variant="ghost" disabled={cleanupPreview.isPending || cleanup.isPending} onClick={() => cleanupPreview.mutate()}>
+                Preview project worktree cleanup
+              </Button>
+              {cleanupPreview.data && (
+                <div aria-label="Worktree cleanup preview">
+                  {cleanupPreview.data.map((preview) => (
+                    <div key={preview.taskId} className="my-2 border-l border-ink-700 pl-3">
+                      <p>
+                        <Link to={`/tasks/${preview.taskId}`} className="underline">
+                          {preview.title}
+                        </Link>
+                        : {preview.eligible ? "Eligible for cleanup." : "Cleanup blocked."}
+                      </p>
+                      <p className="break-all">{preview.path}</p>
+                      {preview.evidence && <p>{preview.evidence}</p>}
+                      {preview.reasons.map((reason) => (
+                        <p key={reason}>{reason}</p>
+                      ))}
+                      {preview.eligible && (
+                        <Button variant="ghost" disabled={cleanup.isPending || cleanupPreview.isPending} onClick={() => cleanup.mutate(preview.taskId)}>
+                          Remove eligible worktree: {preview.title}
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  <p>
+                    Cleanup keeps the branch, recovery reference, chat, run logs, and checkpoint metadata. Recreate the folder with Git worktree add using the
+                    retained branch; use a new task for follow-up changes after delivery.
+                  </p>
+                </div>
+              )}
+              {cleanup.isSuccess && <p>Worktree removed. Task history and recovery references are preserved.</p>}
+              <ErrorNote error={cleanupPreview.error || cleanup.error} />
               <p>
                 {detail.data.workspace.checkpointCommit
                   ? `Local checkpoint: ${detail.data.workspace.checkpointCommit.slice(0, 8)} · ${detail.data.workspace.checkpointAt}`

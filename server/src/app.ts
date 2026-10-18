@@ -316,6 +316,15 @@ export async function buildApp(options: AppOptions): Promise<App> {
   // ---- runs
 
   app.post<{ Params: { id: string } }>("/api/tasks/:id/checkpoint", async (request) => runner.checkpointTask(request.params.id));
+  app.get<{ Params: { id: string } }>("/api/tasks/:id/workspace-cleanup", async (request) => runner.previewWorkspaceCleanup(request.params.id));
+  app.get<{ Params: { id: string } }>("/api/projects/:id/workspace-cleanup", async (request) => {
+    const previews = [];
+    for (const task of store.listTasks(request.params.id)) {
+      if (store.getWorkspace(task.id)) previews.push({ title: task.title, ...(await runner.previewWorkspaceCleanup(task.id)) });
+    }
+    return previews;
+  });
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/workspace-cleanup", async (request) => runner.cleanupWorkspace(request.params.id));
   app.post<{ Params: { id: string } }>("/api/tasks/:id/publish", async (request) => runner.publishWorkspace(request.params.id));
   app.post<{ Params: { id: string } }>("/api/tasks/:id/merge", async (request) => runner.mergeWorkspace(request.params.id));
 

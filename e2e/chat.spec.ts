@@ -25,6 +25,10 @@ test("create a project, chat with the agent, resume, stop and retry", async ({ p
   await expect(page.getByText("Done", { exact: true }).first()).toBeVisible();
   await expect(page.getByLabel("Task workspace")).toContainText("Isolated branch: agent/task-");
   await expect(page.getByLabel("Task workspace")).toContainText("Local checkpoint:");
+  await page.getByRole("button", { name: "Preview project worktree cleanup" }).click();
+  await expect(page.getByLabel("Worktree cleanup preview")).toContainText("Cleanup blocked.");
+  await expect(page.getByLabel("Worktree cleanup preview")).toContainText("No verified Git delivery");
+  await expect(page.getByRole("button", { name: /^Remove eligible worktree/ })).toHaveCount(0);
   await expect(page.getByText("Sonnet 5 · medium").first()).toBeVisible();
   await page.getByText("Bash").click();
   await expect(page.getByText("nothing to commit, working tree clean")).toBeVisible();
