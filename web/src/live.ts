@@ -78,6 +78,7 @@ export function useLiveUpdates(qc: QueryClient): Connection {
           window.dispatchEvent(new CustomEvent<Run>(RUN_FINISHED, { detail: push.run }));
           break;
         case "task_updated":
+          void qc.invalidateQueries({ queryKey: keys.task(push.task.id) });
           void qc.invalidateQueries({ queryKey: keys.compute });
           qc.setQueryData<TaskDetail>(keys.task(push.task.id), (old) => (old ? { ...old, task: push.task } : old));
           void qc.invalidateQueries({ queryKey: keys.tasks(push.task.projectId) });
