@@ -42,7 +42,15 @@ test("staff a studio, give a role a task, accept its proposal, watch the queue",
   const proposal = page.getByRole("article", { name: "Proposal for design/game/combat.md" });
   await expect(proposal).toContainText("Proposed by the fake agent.");
   await page.screenshot({ path: "test-results/inbox.png", fullPage: true });
-  await proposal.getByRole("button", { name: "Accept" }).click();
+  // An edited proposal and a typed rejection reason survive a reload until the proposal is decided.
+  await proposal.getByRole("button", { name: "Edit" }).click();
+  const proposed = proposal.getByRole("textbox", { name: "Proposed content" });
+  await proposed.fill(`${await proposed.inputValue()}\nOwner note.`);
+  await proposal.getByRole("textbox", { name: "Rejection reason" }).fill("Not yet");
+  await page.reload();
+  await expect(proposal.getByRole("textbox", { name: "Proposed content" })).toHaveValue(/Owner note\.$/);
+  await expect(proposal.getByRole("textbox", { name: "Rejection reason" })).toHaveValue("Not yet");
+  await proposal.getByRole("button", { name: "Accept my version" }).click();
   // The task's finished step also waits for review.
   await page
     .getByRole("article", { name: /^Review:/ })
@@ -54,6 +62,7 @@ test("staff a studio, give a role a task, accept its proposal, watch the queue",
   await page.getByRole("button", { name: /game\/combat\.md/ }).click();
   await expect(page.getByText("Proposed by the fake agent.")).toBeVisible();
   await expect(page.getByText("owned by Design")).toBeVisible();
+  await expect(page.getByText("Owner note.")).toBeVisible();
 
   // One slot, held by a chat: the role's task waits and says why.
   await page.goto("/compute");

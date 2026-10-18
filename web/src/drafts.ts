@@ -37,3 +37,29 @@ export function useDraft(key: string | undefined): [string, (text: string) => vo
   );
   return [text, setText];
 }
+
+function readJson<T>(key: string): T | null {
+  const raw = read(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+// An unsaved form (several fields), kept like useDraft until it is saved or discarded with null.
+// Nothing is stored until the first edit, so opening and closing a form leaves no draft behind.
+export function useStoredDraft<T>(key: string): [T | null, (value: T | null) => void] {
+  const [state, setState] = useState(() => ({ key, value: readJson<T>(key) }));
+  if (state.key !== key) setState({ key, value: readJson<T>(key) });
+  const value = state.key === key ? state.value : readJson<T>(key);
+  const setValue = useCallback(
+    (next: T | null) => {
+      setState({ key, value: next });
+      write(key, next === null ? "" : JSON.stringify(next));
+    },
+    [key],
+  );
+  return [value, setValue];
+}

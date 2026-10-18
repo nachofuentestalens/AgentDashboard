@@ -6,7 +6,7 @@ import { api, keys } from "../api.ts";
 import { Markdown } from "../components/Markdown.tsx";
 import { StageActions } from "../components/StageActions.tsx";
 import { Button, ErrorNote, inputClass, PriorityBadge, PrioritySelect, Toggle } from "../components/ui.tsx";
-import { useDraft } from "../drafts.ts";
+import { useDraft, useStoredDraft } from "../drafts.ts";
 import { ago } from "../format.ts";
 import { RoleSelect } from "./ProjectPage.tsx";
 
@@ -146,11 +146,19 @@ function StageCard({ item }: { item: InboxQuestion }) {
 }
 
 function ProposalCard({ p }: { p: Inbox["proposals"][number] }) {
-  const [editing, setEditing] = useState(false);
-  const [body, setBody] = useState(p.body);
-  const [reason, setReason] = useState("");
-  const accept = useMutation({ mutationFn: () => api.acceptProposal(p.id, editing ? body : undefined) });
-  const reject = useMutation({ mutationFn: () => api.rejectProposal(p.id, reason.trim() || undefined) });
+  // The owner's edited version survives leaving the inbox; it is dropped once the proposal is decided.
+  const [edit, setEdit] = useStoredDraft<{ editing: boolean; body: string }>(`proposal:${p.id}`);
+  const [reason, setReason] = useDraft(`reject:${p.id}`);
+  const editing = edit?.editing ?? false;
+  const body = edit?.body ?? p.body;
+  const setBody = (next: string) => setEdit({ editing, body: next });
+  const setEditing = (on: boolean) => setEdit(on || body !== p.body ? { editing: on, body } : null);
+  const decided = () => {
+    setEdit(null);
+    setReason("");
+  };
+  const accept = useMutation({ mutationFn: () => api.acceptProposal(p.id, editing ? body : undefined), onSuccess: decided });
+  const reject = useMutation({ mutationFn: () => api.rejectProposal(p.id, reason.trim() || undefined), onSuccess: decided });
   const diff = useMemo(() => lineDiff(p.current ?? "", editing ? body : p.body), [p.current, p.body, body, editing]);
   return (
     <article className={card} aria-label={`Proposal for ${p.docPath}`}>
