@@ -100,6 +100,8 @@ Demo checklist (real Claude Code, on Windows):
 
 ## Project coordinator
 
+- [x] Owner-requested server restart with queue hold, agent handoffs, verified checkpoints, and persistent sessions; [restart flow](SERVER_RESTART.md)
+
 - [x] Coordinator tab: per-provider session and weekly usage from CLI rate-limit reports, owner readings, limit failures and optional token caps
 - [x] Owner reserve, conserve band and weekly pacing; queued work held by provider and priority (auto mode) with "run anyway"
 - [x] Pause running role work inside the reserve, resume it after the reset, start backlog work before unused session usage resets, move held work to the other provider

@@ -90,6 +90,28 @@ const AUTO_FIX_ROUNDS = 3;
 // A plain chat runs at once. A role's task is queued, and the scheduler starts it when one of the
 // role's agents is free and the compute rules allow. One run per task at a time.
 export class Runner {
+  restartHeld = false;
+
+  restartBusy(): boolean {
+    return this.active.size > 0 || this.workspaceBusy.size > 0 || this.deliveryBusy.size > 0 || this.tickPending;
+  }
+
+  prepareRestartHandoff(taskId: string): Run {
+    const task = this.store.getTask(taskId);
+    if (!this.restartHeld || !task || this.isTaskRunning(taskId)) throw new RunnerError("Task is not ready for a restart handoff.", 409);
+    this.checkBudget(task);
+    if (task.sessionProvider && task.sessionProvider !== this.choice(task).provider)
+      throw new RunnerError("Restore the task's current session provider before preparing its restart handoff.", 409);
+    const text = `The owner requested a server restart. Your worktree and provider session will be preserved. Save a restart handoff now so work can continue after restart.\n\n${HANDOFF_REQUEST}`;
+    const message = this.store.addMessage({ taskId, role: "user", text, runId: null });
+    return this.startNow(task, message, text, "handoff");
+  }
+
+  async saveRestartCheckpoint(taskId: string): Promise<void> {
+    const saved = await this.workspaces.checkpoint(taskId, "Server restart");
+    if (saved?.error) throw new RunnerError(saved.error, 409);
+  }
+
   modelOptions: Record<Provider, readonly ModelOption[]> = MODEL_PRESETS;
   private readonly contextFingerprints = new Map<string, string>();
   private readonly active = new Map<string, ActiveRun>();
@@ -147,6 +169,7 @@ export class Runner {
   }
 
   async deliveryOperation<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
+    if (this.restartHeld) throw new RunnerError("Server restart requested; cancel it before starting delivery.", 409);
     if (this.isProjectBusy(projectId)) throw new RunnerError("A delivery operation is already running for this project.", 409);
     if (this.store.listTasks(projectId).some((t) => this.isTaskRunning(t.id)))
       throw new RunnerError("Wait for this project's running agents and checkpoint operations before changing its baseline.", 409);
@@ -454,7 +477,7 @@ export class Runner {
 
   // Runs a scheduling pass soon. Calls in the same turn of the event loop share one pass.
   tick(): void {
-    if (this.closed) return;
+    if (this.closed || this.restartHeld) return;
     if (this.tickPending) {
       this.tickAgain = true;
       return;
@@ -462,9 +485,9 @@ export class Runner {
     this.tickPending = true;
     setImmediate(async () => {
       try {
-        if (this.closed) return;
+        if (this.closed || this.restartHeld) return;
         await this.deliverReviewed();
-        if (this.closed) return;
+        if (this.closed || this.restartHeld) return;
         this.startIdleBacklog();
         let holds = new Map<Provider, ProviderHold>();
         try {
@@ -519,6 +542,7 @@ export class Runner {
       this.deliveryPending.add(project.id);
       if (tasks.some((t) => this.isTaskRunning(t.id))) continue;
       for (const task of ready) {
+        if (this.closed || this.restartHeld) return;
         try {
           await this.deliver(project.id, task.id);
           this.note(task.id, "info", "Approved and integrated automatically after the passed agent review (project setting).");
@@ -572,6 +596,7 @@ export class Runner {
   }
 
   private requireIdleTask(taskId: string, deliveryApproval = false): Task {
+    if (this.restartHeld) throw new RunnerError("Server restart requested; cancel it before changing task work.", 409);
     const task = this.store.getTask(taskId);
     if (!task) throw new RunnerError("Task not found.", 404);
     if (this.isProjectBusy(task.projectId) && !deliveryApproval) throw new RunnerError("Wait for the project's delivery operation to finish.", 409);
@@ -730,6 +755,7 @@ export class Runner {
   // the author. Approval itself happens in deliverReviewed.
   // ended: the work run that finished a step, or the review run that gave a verdict.
   private automate(taskId: string, ended: Run, record: (event: AgentEvent) => void): void {
+    if (this.restartHeld) return;
     const task = this.store.getTask(taskId);
     const project = task ? this.store.getProject(task.projectId) : null;
     if (!task || !project || task.status !== "idle") return;
@@ -830,7 +856,7 @@ export class Runner {
         }
       }
     }
-    if (this.closed) return;
+    if (this.closed || this.restartHeld) return;
     const queuedRuns = this.store.runsWithStatus("queued");
     if (queuedRuns.length === 0) return;
 
@@ -1207,7 +1233,7 @@ export class Runner {
       // The finished step or the review's verdict now shows in the owner's inbox.
       if (finishedStep || reviewing) this.bus.publish({ type: "inbox_changed" });
       if (finishedStep || reviewing) this.automate(task.id, run, record);
-      if (requestedSwitch) {
+      if (requestedSwitch && !this.restartHeld) {
         const currentTask = this.store.getTask(task.id)!;
         const currentChoice = this.choice(currentTask);
         const handoff = extractHandoff(reply);
