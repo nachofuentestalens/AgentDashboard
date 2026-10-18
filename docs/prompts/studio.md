@@ -41,7 +41,7 @@ Migration 2 in `server/src/db.ts`; types in `shared/src/models.ts`; bodies in `s
 2. Its run is **queued**. The scheduler (`server/src/scheduler.ts`, a pure function with a table test) starts queued runs when:
    - a non-paused agent of the role is free,
    - for a writer, nobody else in the department is writing,
-   - unless it is an emergency or the owner said **run anyway**: the project has no open emergency, the department and global daily budgets (sliding 24 hours) are not reached, and a slot is free (`maxConcurrentRuns`, default 3).
+   - unless it is an emergency or the owner said **run anyway**: the project has no open emergency, the department and global daily budgets (sliding 24 hours) are not reached, and a slot of the run's provider is free (`maxConcurrentRuns` per provider, default 1 each, so one Claude and one Codex agent can work side by side). With "start next when idle", each pass also queues backlog tasks up to the free agents, provider slots and department writer, so raising a limit starts more work at once.
    - Order: emergencies first; then the department with the lowest `spend / weight` (24-hour spend plus estimates for its running agents); inside it the highest priority, then the oldest. Emergencies also ignore the slot limit.
    - Every run that waits shows why ("Every QA Tester agent is busy.", "QA reached its daily budget ($1.50 of $1.00).").
 3. The agent gets its role preamble through `--append-system-prompt-file` (who it is, its job, where it may write, the block protocol) and, in front of the message on stdin, the studio context: the team, the design document index, its always-read documents (first turn), and the task's priority and origin. No role or user text is ever a process argument.

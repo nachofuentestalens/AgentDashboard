@@ -57,14 +57,14 @@ test("staff a studio, give a role a task, accept its proposal, watch the queue",
 
   // One slot, held by a chat: the role's task waits and says why.
   await page.goto("/compute");
-  await page.getByRole("spinbutton").fill("1");
+  await page.getByRole("spinbutton", { name: /^Claude agents at once/ }).fill("1");
   await page.getByRole("button", { name: "Save limits" }).click();
   await expect(page.getByText("Saved.")).toBeVisible();
   const chat = await request.post(`/api/projects/${projectId}/tasks`, { data: { message: "[slow]" } });
   const qa = (await (await request.get(`/api/projects/${projectId}/studio`)).json()) as { departments: { roles: { id: string; name: string }[] }[] };
   const qaRole = qa.departments.flatMap((d) => d.roles).find((r) => r.name === "QA Tester")!;
   await request.post(`/api/projects/${projectId}/tasks`, { data: { roleId: qaRole.id, message: "Run the smoke test", priority: 9 } });
-  await expect(page.getByText(/Waiting for a free slot \(1 of 1 agents running\)/)).toBeVisible();
+  await expect(page.getByText(/Waiting for a free Claude slot \(1 of 1 running\)/)).toBeVisible();
   await expect(page.getByRole("meter", { name: "QA spend" })).toBeVisible();
   await page.screenshot({ path: "test-results/compute.png", fullPage: true });
 

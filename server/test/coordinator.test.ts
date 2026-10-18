@@ -211,7 +211,7 @@ describe("scheduler holds", () => {
     ...over,
   });
   const s = (queued: QueuedRun[], minPriority: number | null): SchedulerState => ({
-    maxConcurrent: 5,
+    maxConcurrent: { claude: 5, codex: 5 },
     budgetUsd: null,
     spendUsd: 0,
     departments: new Map([["eng", { name: "Engineering", weight: 5, budgetUsd: null, spendUsd: 0 }]]),

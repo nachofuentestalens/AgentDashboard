@@ -257,6 +257,22 @@ describe("task stages", () => {
     expect(app.store.listMessages(first.id)[0]!.text).toBe("Start on this task: Urgent check");
   });
 
+  it("starts more backlog work as soon as the provider's agent limit is raised", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "POST", `/api/roles/${qa.id}/agents`, {});
+    // Read-only tasks, so the department's one-writer rule does not hold the second.
+    const first = await newTask(app, projectId, { roleId: qa.id, title: "First [slow]", canEdit: false, priority: 9 });
+    const second = await newTask(app, projectId, { roleId: qa.id, title: "Second [slow]", canEdit: false });
+    await api(app, "PATCH", `/api/projects/${projectId}`, { startNextWhenIdle: true });
+    await waitFor(() => app.store.getTask(first.id)!.status === "running");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(app.store.listRuns(second.id)).toEqual([]);
+
+    expect((await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: { claude: 2 } })).body).toMatchObject({ maxConcurrentRuns: { claude: 2, codex: 1 } });
+    await waitFor(() => app.store.getTask(second.id)!.status === "running");
+    expect(app.store.getTask(first.id)!.status).toBe("running");
+  });
+
   it("maps the legacy done flag to approve and close", async () => {
     const { app, projectId, qa } = await roleProject();
     const task = await newTask(app, projectId, { roleId: qa.id, message: "check" });

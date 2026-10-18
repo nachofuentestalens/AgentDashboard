@@ -469,6 +469,7 @@ export class Studio implements ReplyHandler {
         departmentName: run.departmentId ? (departments.find((d) => d.id === run.departmentId)?.name ?? null) : null,
         priority: task.priority,
         emergency: task.emergency,
+        provider: run.status === "queued" ? this.runner.runProvider(run) : run.provider,
       };
     };
     const active = this.runner.activeRuns().flatMap((a) => {

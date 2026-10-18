@@ -17,7 +17,7 @@ const q = (runId: string, over: Partial<QueuedRun> = {}): QueuedRun => ({
 });
 
 const state = (over: Partial<SchedulerState> = {}): SchedulerState => ({
-  maxConcurrent: 3,
+  maxConcurrent: { claude: 3, codex: 3 },
   budgetUsd: null,
   spendUsd: 0,
   departments: new Map([
@@ -41,18 +41,30 @@ describe("scheduler", () => {
   it.each([
     {
       name: "higher priority first within a department",
-      s: state({ maxConcurrent: 1, queued: [q("low", { priority: 2 }), q("high", { priority: 9 }), q("mid", { priority: 5 })] }),
+      s: state({ maxConcurrent: { claude: 1, codex: 1 }, queued: [q("low", { priority: 2 }), q("high", { priority: 9 }), q("mid", { priority: 5 })] }),
       start: ["high"],
     },
     {
+      name: "each provider has its own slots",
+      s: state({
+        maxConcurrent: { claude: 1, codex: 1 },
+        active: [{ runId: "busy", departmentId: "eng", canEdit: false, provider: "claude" }],
+        queued: [q("cl", { provider: "claude", priority: 9 }), q("cx", { provider: "codex" }), q("cx2", { provider: "codex" })],
+      }),
+      start: ["cx"],
+    },
+    {
       name: "older first at equal priority",
-      s: state({ maxConcurrent: 1, queued: [q("bb", { queuedAt: "2026-01-02T00:00:00Z" }), q("aa", { queuedAt: "2026-01-01T00:00:00Z" })] }),
+      s: state({
+        maxConcurrent: { claude: 1, codex: 1 },
+        queued: [q("bb", { queuedAt: "2026-01-02T00:00:00Z" }), q("aa", { queuedAt: "2026-01-01T00:00:00Z" })],
+      }),
       start: ["aa"],
     },
     {
       name: "the department that spent least per weight goes next, whatever the priority",
       s: state({
-        maxConcurrent: 1,
+        maxConcurrent: { claude: 1, codex: 1 },
         departments: new Map([
           ["eng", { name: "Engineering", weight: 5, budgetUsd: null, spendUsd: 5 }], // 1.0 per weight
           ["des", { name: "Design", weight: 3, budgetUsd: null, spendUsd: 1.5 }], // 0.5 per weight
@@ -77,7 +89,7 @@ describe("scheduler", () => {
     {
       name: "an emergency skips the full slots and the queue",
       s: state({
-        maxConcurrent: 1,
+        maxConcurrent: { claude: 1, codex: 1 },
         active: [{ runId: "x", departmentId: null, canEdit: false }],
         queued: [q("normal", { priority: 10 }), q("fire", { emergency: true, priority: 0 })],
       }),
@@ -116,7 +128,7 @@ describe("scheduler", () => {
   it("explains why runs wait", () => {
     const result = plan(
       state({
-        maxConcurrent: 1,
+        maxConcurrent: { claude: 1, codex: 1 },
         staffedRoles: new Set(["prog"]),
         departments: new Map([
           ["eng", { name: "Engineering", weight: 5, budgetUsd: 1, spendUsd: 2 }],
@@ -133,7 +145,7 @@ describe("scheduler", () => {
   it("assigns distinct free agents and charges estimates as it goes", () => {
     const result = plan(
       state({
-        maxConcurrent: 5,
+        maxConcurrent: { claude: 5, codex: 5 },
         departments: new Map([["eng", { name: "Engineering", weight: 5, budgetUsd: 0.25, spendUsd: 0 }]]),
         queued: [q("r1", { estimateUsd: 0.2 }), q("r2", { estimateUsd: 0.2 }), q("r3", { estimateUsd: 0.2 })],
       }),

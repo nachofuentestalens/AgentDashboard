@@ -35,7 +35,7 @@ Spec: [docs/prompts/studio.md](prompts/studio.md).
 - [x] Role tasks: a priority from 0 to 10 and an emergency flag; queued, then picked up by a free agent of the role, highest priority first
 - [x] Folder ownership enforced by Claude Code permission rules; one writing agent per department at a time; read-only runs alongside
 - [x] Role preamble via `--append-system-prompt-file`, studio context (team, design document index, always-read documents) in front of the message on stdin
-- [x] Scheduler: global concurrency limit and daily budget, per-department budgets, fair share by spend per weight, emergencies first and freezing their project, "run anyway", queued runs survive restarts
+- [x] Scheduler: per-provider concurrency limits (Claude and Codex, one each by default) and daily budget, per-department budgets, fair share by spend per weight, emergencies first and freezing their project, "run anyway", queued runs survive restarts
 - [x] Agents end replies with fenced `task`, `proposal` and `question` blocks; malformed blocks become warnings, never failures
 - [x] Delegation: department autonomy, depth limit of 2, unknown roles and deeper requests go to the inbox
 - [x] Design documents under `design/` with a Docs tab (view, edit and commit, history); proposals with a diff; `design/decisions.md` appended on accepted proposals and recorded answers
@@ -47,7 +47,7 @@ Demo checklist (real Claude Code, on Windows):
 
 1. Studio tab → Apply the template. Edit the CTO: see its model, effort and job description.
 2. Tasks tab → assign "CTO" a task: "Choose the stack for a small 2D idle game and write design/studio/tech-stack.md". It queues, starts, and the file appears; the CTO cannot edit `src/`.
-3. Give the Gameplay Programmer two tasks at priority 3 and 8 with one slot (Compute → Agents at once = 1): the 8 starts first. A second programmer agent still waits: one writer per department.
+3. Give the Gameplay Programmer two tasks at priority 3 and 8 with one slot (Compute → Claude agents at once = 1): the 8 starts first. A second programmer agent still waits: one writer per department.
 4. Ask the QA Tester to break the build on purpose and report it: it raises an emergency for the Gameplay Programmer, which starts at once; the Studio shows the emergency banner until it is done.
 5. Ask the Systems Designer for a combat design: its task requests wait in the Inbox (Design asks first); approve one with a different priority.
 6. Ask the Gameplay Programmer to propose a change to `design/game/combat.md`: accept it with an edit in the Inbox; the file, `design/decisions.md` and one commit appear.

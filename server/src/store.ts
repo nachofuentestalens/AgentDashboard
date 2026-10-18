@@ -11,8 +11,10 @@ import {
   EFFORT_LEVELS,
   emptyUsage,
   isProvider,
+  PROVIDERS,
   taskGitState,
   type Provider,
+  type ProviderLimits,
   type Agent,
   type Autonomy,
   type Department,
@@ -382,18 +384,27 @@ export class Store {
       defaultProvider: optProvider(map.get("defaultProvider")) ?? DEFAULT_PROVIDER,
       defaultModel: map.get("defaultModel") ?? DEFAULT_MODEL,
       defaultEffort: asEffort(map.get("defaultEffort") ?? DEFAULT_EFFORT),
-      maxConcurrentRuns: Number(map.get("maxConcurrentRuns")) || DEFAULT_MAX_CONCURRENT_RUNS,
+      // Per-provider keys; the older shared "maxConcurrentRuns" key is ignored, so every provider starts at the default.
+      maxConcurrentRuns: Object.fromEntries(
+        PROVIDERS.map((p) => [p.id, Number(map.get(`maxConcurrentRuns.${p.id}`)) || DEFAULT_MAX_CONCURRENT_RUNS]),
+      ) as ProviderLimits,
       dailyBudgetUsd: budget ? Number(budget) : null,
       defaultTokenBudget: allowance(map.get("defaultTokenBudget"), DEFAULT_TASK_TOKEN_BUDGET),
       defaultToolBudget: allowance(map.get("defaultToolBudget"), DEFAULT_TASK_TOOL_BUDGET),
     };
   }
 
-  updateSettings(patch: Partial<Settings>): Settings {
+  updateSettings(patch: Partial<Omit<Settings, "maxConcurrentRuns">> & { maxConcurrentRuns?: Partial<ProviderLimits> }): Settings {
     const upsert = this.db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
     transaction(this.db, () => {
       // null clears a limit: stored as an empty string.
-      for (const [key, value] of Object.entries(patch)) if (value !== undefined) upsert.run(key, value === null ? "" : String(value));
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === undefined) continue;
+        if (key === "maxConcurrentRuns") {
+          for (const [provider, limit] of Object.entries(value as Partial<ProviderLimits>))
+            if (limit !== undefined) upsert.run(`${key}.${provider}`, String(limit));
+        } else upsert.run(key, value === null ? "" : String(value));
+      }
     });
     return this.getSettings();
   }

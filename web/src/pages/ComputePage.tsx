@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
-import type { ComputeDepartment, ComputeRun } from "@ad/shared";
+import { PROVIDERS, type ComputeDepartment, type ComputeRun, type Provider } from "@ad/shared";
 import { api, keys } from "../api.ts";
 import { Button, ErrorNote, Field, inputClass, PriorityBadge } from "../components/ui.tsx";
 import { cost, duration } from "../format.ts";
@@ -10,15 +10,20 @@ export function ComputePage() {
   const qc = useQueryClient();
   const compute = useQuery({ queryKey: keys.compute, queryFn: api.compute, refetchInterval: 15_000 });
   const settings = useQuery({ queryKey: keys.settings, queryFn: api.settings });
-  const [max, setMax] = useState("");
+  const [max, setMax] = useState<Record<Provider, string>>({ claude: "", codex: "" });
   const [budget, setBudget] = useState("");
   useEffect(() => {
     if (!settings.data) return;
-    setMax(String(settings.data.maxConcurrentRuns));
+    const limits = settings.data.maxConcurrentRuns;
+    setMax({ claude: String(limits.claude), codex: String(limits.codex) });
     setBudget(settings.data.dailyBudgetUsd === null ? "" : String(settings.data.dailyBudgetUsd));
   }, [settings.data]);
   const save = useMutation({
-    mutationFn: () => api.updateSettings({ maxConcurrentRuns: Number(max), dailyBudgetUsd: budget.trim() === "" ? null : Number(budget) }),
+    mutationFn: () =>
+      api.updateSettings({
+        maxConcurrentRuns: { claude: Number(max.claude), codex: Number(max.codex) },
+        dailyBudgetUsd: budget.trim() === "" ? null : Number(budget),
+      }),
     onSuccess: (s) => {
       qc.setQueryData(keys.settings, s);
       void qc.invalidateQueries({ queryKey: keys.compute });
@@ -32,16 +37,20 @@ export function ComputePage() {
         <div>
           <h1 className="text-xl font-semibold">Compute</h1>
           <p className="mt-1 text-sm text-ink-400">
-            How many agents run at once and what they spend. Departments share free slots by weight; inside a department the highest priority goes first. Dollar
-            totals include only reported costs. Codex does not report a dollar cost; these budgets do not cap ChatGPT usage, plain chats or active runs.
-            Emergencies skip the queue.
+            How many agents of each provider run at once and what they spend. Departments share free slots by weight; inside a department the highest priority
+            goes first. Dollar totals include only reported costs. Codex does not report a dollar cost; these budgets do not cap ChatGPT usage, plain chats or
+            active runs. Emergencies skip the queue.
           </p>
         </div>
         <ErrorNote error={compute.error} />
 
         {c && (
           <div className="grid grid-cols-3 gap-3">
-            <Stat label="Agents running" value={`${c.active.length}`} sub={`of ${c.maxConcurrentRuns} slots`} />
+            <Stat
+              label="Agents running"
+              value={`${c.active.length}`}
+              sub={PROVIDERS.map((p) => `${p.label} ${c.active.filter((r) => r.provider === p.id).length} of ${c.maxConcurrentRuns[p.id]}`).join(" · ")}
+            />
             <Stat label="Queued" value={`${c.queued.length}`} sub={c.queued.length ? `next: ${c.queued[0]!.taskTitle}` : "nothing waiting"} />
             <Stat
               label="Spend, last 24 h"
@@ -59,9 +68,18 @@ export function ComputePage() {
             save.mutate();
           }}
         >
-          <Field label="Agents at once" hint="Across all projects. Plain chats always start, but count.">
-            <input className={`${inputClass} !w-28`} type="number" min={1} max={32} value={max} onChange={(e) => setMax(e.target.value)} />
-          </Field>
+          {PROVIDERS.map((p) => (
+            <Field key={p.id} label={`${p.label} agents at once`} hint="Across all projects. Plain chats always start, but count.">
+              <input
+                className={`${inputClass} !w-28`}
+                type="number"
+                min={1}
+                max={32}
+                value={max[p.id]}
+                onChange={(e) => setMax((m) => ({ ...m, [p.id]: e.target.value }))}
+              />
+            </Field>
+          ))}
           <Field label="Daily budget ($)" hint="Over the last 24 hours. Empty: no limit.">
             <input className={`${inputClass} !w-36`} inputMode="decimal" placeholder="none" value={budget} onChange={(e) => setBudget(e.target.value)} />
           </Field>
