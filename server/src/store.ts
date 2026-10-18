@@ -582,6 +582,12 @@ export class Store {
     return r ? toWorkspace(r) : null;
   }
 
+  workspacesAwaitingMerge(): TaskWorkspace[] {
+    return (
+      this.db.prepare("SELECT * FROM task_workspaces WHERE github_repo IS NOT NULL AND pull_request_url IS NOT NULL AND merge_commit IS NULL").all() as Row[]
+    ).map(toWorkspace);
+  }
+
   saveWorkspace(w: TaskWorkspace): void {
     this.db
       .prepare(

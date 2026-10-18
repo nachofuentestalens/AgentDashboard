@@ -61,6 +61,20 @@ test("create a project, chat with the agent, resume, stop and retry", async ({ p
   await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("Half-written reply");
   await page.getByRole("navigation").getByRole("link", { name: "Idle Quest" }).click();
   await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("Half-written brief");
+
+  // A task push must refresh workspace metadata even when no run or publish operation finished.
+  await page.getByRole("link", { name: /Design three starter classes/ }).click();
+  const taskId = new URL(page.url()).pathname.split("/").at(-1)!;
+  await expect(page.getByLabel("Task workspace")).toContainText("Not published to GitHub.");
+  await page.route(`**/api/tasks/${taskId}`, async (route) => {
+    const response = await route.fetch();
+    const detail = await response.json();
+    await route.fulfill({ json: { ...detail, workspace: { ...detail.workspace, mergeCommit: "abc1234" } } });
+  });
+  const updated = await page.request.patch(`/api/tasks/${taskId}`, { data: { title: "Externally merged task" } });
+  expect(updated.ok()).toBe(true);
+  await expect(page.getByLabel("Task workspace")).toContainText("Merged as abc1234");
+  await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("Half-written reply");
 });
 
 test("settings find the demo agent", async ({ page }) => {
