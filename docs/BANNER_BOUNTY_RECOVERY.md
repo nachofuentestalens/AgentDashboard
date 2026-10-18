@@ -63,3 +63,11 @@ Banner & Bounty now has auto-review, hands-off approval/integration, start-next,
 The coordinator was changed from advise to auto, keeping its 20% session reserve, 15% weekly reserve and existing provider choices. Pause/resume is enabled. This is dashboard-wide. Claude's recorded reset is around 01:40 Dubai time on October 18; queued work becomes eligible when refreshed usage permits it, subject to capacity and dependencies. No manual restart is needed for this usage hold. Review failures after three repair rounds, merge conflicts, explicit questions or unrelated process failures can still need intervention.
 
 Editable owner chats will launch with full provider permissions after this worktree's code is deployed. Studio department boundaries and read-only reviews remain enforced. This task did not deploy code, change the live checkout, or move any branches.
+
+## Baseline conflict repair: 2026-10-18, approximately 04:55 UTC
+
+After the Claude session reset, the coordinator was in auto mode with Claude at "ok", and it held nothing. Overnight, M1-06 and M1-09 were approved and integrated (baseline `1c659bc`). The remaining blocker was M1-07: refreshing its worktree onto the new baseline conflicted in `apps/server/package.json` and `package-lock.json`. M1-06 had bumped `content`/`game` to `^0.2.0`, while M1-07 had added `zod` and re-sorted the dependencies. Backlog successors wait on M1-07.
+
+The repair stopped the queued run, merged the baseline into M1-07's worktree with `--no-commit`, and took the baseline's version of both files with M1-07's `zod` additions re-applied. `npm install --package-lock-only` left the lockfile content unchanged. The dashboard then recorded the merge through `POST /api/tasks/:id/checkpoint`, giving checkpoint `3bdded08` with parents `9a825b0` and `1c659bc`, published to draft PR #5. The run was then retried. A merge made through the checkpoint endpoint keeps the "branch changed outside the dashboard" guard satisfied. A plain `git commit` in the worktree would not.
+
+With `maxConcurrentRuns` at 1, any running owner chat takes the only slot, so queued milestone work waits for it.
