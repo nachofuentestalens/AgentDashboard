@@ -1,5 +1,6 @@
 import type { TaskWorkspace } from "@ad/shared";
 import { git } from "./git.ts";
+import { checkpointTitle } from "./commit-summary.ts";
 import type { Store } from "./store.ts";
 import type { Workspaces } from "./workspaces.ts";
 
@@ -121,6 +122,9 @@ export class Github {
       const repo = await this.api(w.path, repository, prefix);
       if (!this.available()) return w;
       const task = this.store.getTask(taskId);
+      const message = await this.runGit(w.path, ["show", "-s", "--format=%B", w.checkpointCommit!]);
+      if (!message.ok) throw new Error("Cannot read the checkpoint summary.");
+      const title = checkpointTitle(message.stdout);
       const body =
         `Task: ${task?.title ?? taskId}\n\nCheckpoint: ${w.checkpointCommit}\n\n${task?.handoff ?? task?.stepSummary ?? "Work in progress. Review the task transcript before merging."}\n\nCreated by AgentDashboard. Local checkpoints may contain incomplete work.`.slice(
           0,
@@ -134,7 +138,7 @@ export class Github {
       const pull =
         pulls[0] ??
         ((await this.api(w.path, repository, `${prefix}/pulls`, "POST", {
-          title: (task?.title ?? `Task ${taskId}`).slice(0, 200),
+          title,
           body,
           head: w.branch,
           base: repo.default_branch,
@@ -146,7 +150,7 @@ export class Github {
           query: "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { id } } }",
           variables: { id: pull.node_id },
         });
-      if (pulls.length) await this.api(w.path, repository, `${prefix}/pulls/${pull.number}`, "PATCH", { body });
+      if (pulls.length) await this.api(w.path, repository, `${prefix}/pulls/${pull.number}`, "PATCH", { title, body });
       w.pullRequestUrl = `https://github.com/${repository}/pull/${pull.number}`;
       w.publishError = null;
     } catch (error) {
@@ -205,7 +209,13 @@ export class Github {
           query: "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
           variables: { id: pull.node_id },
         });
-      const merged = await this.api(w.path, repository, `${prefix}/pulls/${number}/merge`, "PUT", { sha: w.checkpointCommit, merge_method: "squash" });
+      const message = await this.runGit(w.path, ["show", "-s", "--format=%B", w.checkpointCommit!]);
+      if (!message.ok) throw new Error("Cannot read the checkpoint summary.");
+      const merged = await this.api(w.path, repository, `${prefix}/pulls/${number}/merge`, "PUT", {
+        sha: w.checkpointCommit,
+        merge_method: "squash",
+        commit_title: checkpointTitle(message.stdout),
+      });
       if (!merged.merged) throw new Error("GitHub did not merge the pull request. Resolve conflicts or branch requirements on GitHub.");
       w.mergeCommit = merged.sha;
       w.publishError = null;

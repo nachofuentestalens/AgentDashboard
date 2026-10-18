@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { commitSummary } from "./commit-summary.ts";
 import path from "node:path";
 import readline from "node:readline";
 import {
@@ -1169,8 +1170,13 @@ export class Runner {
       // interrupted, which is what happened.
       if (this.closed) return;
       let checkpointError: string | null = null;
+      const reply = (result && !result.isError ? result.text : "") || finalText(events);
       if (canEdit) {
-        const saved = await this.workspaces.checkpoint(task.id, active.stopRequested ? "Paused work" : "End of agent run");
+        const saved = await this.workspaces.checkpoint(
+          task.id,
+          active.stopRequested ? "Paused work" : "End of agent run",
+          !active.stopRequested && result && !result.isError ? commitSummary(reply) : null,
+        );
         checkpointError = saved?.error ?? null;
         if (this.closed) return;
         if (saved)
@@ -1195,7 +1201,6 @@ export class Runner {
           : status === "failed"
             ? checkpointError || (result?.isError ? result.text : null) || exitError || stderrTail.trim() || `${cli.name} exited without a result.`
             : null;
-      const reply = (result && !result.isError ? result.text : "") || finalText(events);
       if (reply.trim()) this.store.addMessage({ taskId: task.id, role: "assistant", text: reply, runId: run.id });
       // A review's reply is advice about the work, never a handoff of the author's session.
       if (reviewing) {
@@ -1356,6 +1361,11 @@ export class Runner {
         record({ kind: "notice", level: "info", text: `Isolated worktree: ${workspace.path} (${workspace.branch}). The project checkout is unchanged.` });
         prompt +=
           "\n\nMake repository changes only in this task's isolated worktree. Keep its assigned branch. The dashboard saves local WIP commits after runs; do not switch branches, merge into the live checkout, or remove the worktree. Dependencies may need installing in this separate folder. External tools and services may be used when required by the owner's request.";
+        if (canEdit)
+          prompt +=
+            '\n\nWhen you change repository files, include a fenced commit-summary JSON block in your final reply: {"title":"Describe what this run changed","taskTitle":"Describe what all changes on this task branch achieved"}. Use concise imperative Git titles (maximum 120 characters each), grounded in the actual diff, not the initial request. Inspect the diff against the task base commit ' +
+            workspace.baseCommit +
+            " for taskTitle so it covers earlier runs too. Describe partial work honestly; do not claim unimplemented outcomes. These titles name the local checkpoint and the draft PR/squash commit; they do not approve or merge anything.";
       }
       let launcher: Launcher;
       let args: string[];

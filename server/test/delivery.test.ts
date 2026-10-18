@@ -82,12 +82,14 @@ describe("managed project delivery", () => {
     await workspaces.checkpoint(next.id, "saved WIP");
     const fw = await workspaces.ensure(first.id, repo);
     fs.writeFileSync(path.join(fw.path, "contract.md"), "approved output");
-    const checkpoint = await workspaces.checkpoint(first.id, "first output");
+    const checkpoint = await workspaces.checkpoint(first.id, "first output", { title: "Write contract", taskTitle: "Define the gameplay contract" });
     await approveTask(first.id);
     const preview = await api<BaselinePreview>(app, "POST", `${endpoint}/integrate`, { taskId: first.id });
     expect(preview.status).toBe(200);
     expect(preview.body.sourceCommit).toBe(checkpoint!.checkpointCommit);
     expect((await api(app, "POST", `${endpoint}/approve`, { previewId: preview.body.id })).status).toBe(200);
+    // A fast-forward preserves the checkpoint and its run-specific subject.
+    expect(git(repo, "show", "-s", "--format=%s", app.store.projectBaseline(projectId)!.commit)).toBe("Write contract");
     app.runner.send(next.id, "Read the approved contract");
     await stepFinished(app, next.id);
     expect(fs.readFileSync(path.join(nw.path, "saved-wip.txt"), "utf8")).toBe("preserve me");

@@ -159,6 +159,8 @@ if (prompt.includes("[slow]")) {
 
 const fence = (lang, body) => `\`\`\`${lang}\n${body}\n\`\`\``;
 const blocks = [];
+if (prompt.includes("[commit-summary]"))
+  blocks.push(fence("commit-summary", JSON.stringify({ title: "Add agent workspace output", taskTitle: "Preserve agent work in isolated workspaces" })));
 for (const m of prompt.matchAll(/\[proposal:([^\]]+)\]/g)) {
   blocks.push(fence("proposal", JSON.stringify({ docPath: m[1], rationale: "Fake rationale.", body: `# ${m[1]}\n\nProposed by the fake agent.\n` })));
 }
