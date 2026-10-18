@@ -779,15 +779,16 @@ export class Runner {
   // a passed one up to the project's step limit, or (hands-off delivery) send the findings back to
   // the author. Approval itself happens in deliverReviewed.
   // ended: the work run that finished a step, or the review run that gave a verdict.
-  private automate(taskId: string, ended: Run, record: (event: AgentEvent) => void): void {
-    if (this.restartHeld) return;
+  private automate(taskId: string, ended: Run, record: (event: AgentEvent) => void): boolean {
+    // True when an automatic run carries on from this one, so the owner is not alerted yet.
+    if (this.restartHeld) return false;
     const task = this.store.getTask(taskId);
     const project = task ? this.store.getProject(task.projectId) : null;
-    if (!task || !project || task.status !== "idle") return;
+    if (!task || !project || task.status !== "idle") return false;
     try {
       if (ended.purpose === "review" && task.stage === "changes_requested") {
         const review = this.store.listTaskReviews(task.id).at(-1);
-        if (!project.autoApprove || review?.runId !== ended.id || task.autoContinues >= AUTO_FIX_ROUNDS) return;
+        if (!project.autoApprove || review?.runId !== ended.id || task.autoContinues >= AUTO_FIX_ROUNDS) return false;
         this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
         record({
           kind: "notice",
@@ -795,13 +796,13 @@ export class Runner {
           text: `Sending the findings back to the author automatically (${task.autoContinues + 1} of ${AUTO_FIX_ROUNDS}).`,
         });
         this.send(task.id, ["Address these review findings:", ...review.findings.map((f) => `- ${f}`)].join("\n"), true);
-        return;
+        return true;
       }
-      if (task.stage !== "needs_review") return;
+      if (task.stage !== "needs_review") return false;
       if (ended.purpose === "review") {
         const passed = this.store.listTaskReviews(task.id).at(-1);
-        if (passed?.runId !== ended.id || passed.verdict !== "pass") return;
-        if (task.stepState !== "done" || !task.nextStep || task.autoContinues >= project.autoContinueSteps) return;
+        if (passed?.runId !== ended.id || passed.verdict !== "pass") return false;
+        if (task.stepState !== "done" || !task.nextStep || task.autoContinues >= project.autoContinueSteps) return false;
         this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
         record({
           kind: "notice",
@@ -809,18 +810,24 @@ export class Runner {
           text: `Continuing automatically (${task.autoContinues + 1} of ${project.autoContinueSteps}): ${task.nextStep}`,
         });
         this.send(task.id, `Continue with: ${task.nextStep}`, true);
+        return true;
       } else if (project.autoReview) {
         // A reply that changed no files (a status question, say) keeps the earlier passed review.
         if (this.store.getWorkspace(task.id) && this.passedOnCheckpoint(task)) {
           record({ kind: "notice", level: "info", text: "No changes since the passed agent review, so it is not reviewed again." });
-          return;
+          return false;
         }
         record({ kind: "notice", level: "info", text: "Asking for an agent review automatically (project setting)." });
-        this.startReview(task.id).catch((error: Error) => record({ kind: "notice", level: "warn", text: `Automatic review did not start: ${error.message}` }));
+        this.startReview(task.id).catch((error: Error) => {
+          record({ kind: "notice", level: "warn", text: `Automatic review did not start: ${error.message}` });
+          this.bus.publish({ type: "reply_ready", run: this.store.getRun(ended.id) ?? ended });
+        });
+        return true;
       }
     } catch (error) {
       record({ kind: "notice", level: "warn", text: `Automation stopped: ${(error as Error).message}` });
     }
+    return false;
   }
 
   // A review that ends without a verdict hands the work back to the owner.
@@ -1017,6 +1024,7 @@ export class Runner {
         this.publishTask(this.store.setTaskStatus(failed.taskId, "failed"));
       }
       this.bus.publish({ type: "run_updated", run: failed });
+      this.bus.publish({ type: "reply_ready", run: failed });
       this.tick();
       return failed;
     }
@@ -1257,7 +1265,7 @@ export class Runner {
       );
       // The finished step or the review's verdict now shows in the owner's inbox.
       if (finishedStep || reviewing) this.bus.publish({ type: "inbox_changed" });
-      if (finishedStep || reviewing) this.automate(task.id, run, record);
+      let continued = finishedStep || reviewing ? this.automate(task.id, run, record) : false;
       if (requestedSwitch && !this.restartHeld) {
         const currentTask = this.store.getTask(task.id)!;
         const currentChoice = this.choice(currentTask);
@@ -1297,11 +1305,14 @@ export class Runner {
             const continuation = `<model-continuation>\nOriginal owner request:\n${original.text}\n\nNext step:\n${review.nextStep}\n</model-continuation>`;
             if (task.roleId) this.enqueue(updated, original, continuation);
             else this.startNow(updated, original, continuation);
+            continued = true;
           } catch (error) {
             record({ kind: "notice", level: "warn", text: `Could not continue after model switch: ${(error as Error).message}` });
           }
         }
       }
+      // Desktop alerts announce a reply only when nothing automatic carries on from it.
+      if (finished && !continued) this.bus.publish({ type: "reply_ready", run: finished });
       this.tick();
     };
 
