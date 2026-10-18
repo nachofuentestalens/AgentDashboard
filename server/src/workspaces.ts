@@ -4,6 +4,7 @@ import type { TaskWorkspace } from "@ad/shared";
 import { COMMIT_ID, git } from "./git.ts";
 import type { Store } from "./store.ts";
 import { mergeCommit } from "./baseline.ts";
+import type { CommitSummary } from "./commit-summary.ts";
 
 const identity = ["-c", "user.name=AgentDashboard", "-c", "user.email=agentdashboard@localhost"];
 
@@ -131,7 +132,7 @@ export class Workspaces {
     return updated;
   }
 
-  async checkpoint(taskId: string, reason: string): Promise<TaskWorkspace | null> {
+  async checkpoint(taskId: string, reason: string, summary: CommitSummary | null = null): Promise<TaskWorkspace | null> {
     const w = this.store.getWorkspace(taskId);
     if (!w) return null;
     try {
@@ -140,7 +141,17 @@ export class Workspaces {
       if (await checked(w.path, ["ls-files", "--unmerged"])) throw new Error("Resolve the task's merge conflicts before checkpointing. Files are preserved.");
       await checked(w.path, ["add", "-A", "--", "."]);
       const diff = await git(w.path, ["diff", "--cached", "--quiet"]);
-      if (!diff.ok) await checked(w.path, [...identity, "commit", "-F", "-"], `WIP: ${reason}\n\nTask: ${taskId}\n`);
+      if (!diff.ok) {
+        const files = (await checked(w.path, ["diff", "--cached", "--name-only", "-z"])).split("\0").filter(Boolean);
+        const fallback = `Update ${files.slice(0, 2).join(", ")}${files.length > 2 ? ` and ${files.length - 2} more files` : ""}`
+          .replace(/[\r\n\x00-\x1f\x7f]/g, " ")
+          .slice(0, 120);
+        await checked(
+          w.path,
+          [...identity, "commit", "-F", "-"],
+          `${summary?.title ?? fallback}\n\nCheckpoint: ${reason}\nTask: ${taskId}\n${summary ? `Task-summary: ${summary.taskTitle}\n` : ""}`,
+        );
+      }
       w.checkpointCommit = await checked(w.path, ["rev-parse", "HEAD"]);
       w.checkpointAt = new Date().toISOString();
       w.error = null;

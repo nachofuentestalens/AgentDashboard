@@ -71,6 +71,7 @@ Demo checklist (real Claude Code, on Windows):
 - [ ] Each writing task gets its own git worktree and branch; final approval shows the diff and merges; conflicts go to the Inbox with "Resolve with agent". Lifts the one-writer-per-department rule
   - [x] Persistent task worktrees, isolated runner/reviews, local end-of-run checkpoints and Pause & checkpoint UI; [recovery and rollout](WORKSPACES.md)
   - [x] GitHub checkpoint pushes and draft PRs, exact-commit approval/check gating and owner-triggered squash merge; manual deploy/revert instructions
+  - [x] Outcome-based checkpoint, PR, squash and integration titles from final run summaries, with changed-file fallbacks
   - [ ] Automatic conflict resolution and worktree cleanup; lift department concurrency limits after integration
 - [ ] Templates: Feature, Bugfix, Balance pass, Content batch; save your own
 - [ ] Promote a chat to a workflow
