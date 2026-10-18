@@ -27,6 +27,17 @@ it.each(["claude", "codex"] as const)("%s reviews first and switches with a fres
   expect(app.runner.readEvents(runs[0]!.id).some((e) => e.event.kind === "notice" && e.event.text.includes("Switching to"))).toBe(true);
 });
 
+it("announces only the reply that no automatic switch carries on from", async () => {
+  app = await testApp();
+  const ready: string[] = [];
+  app.bus.subscribe((push) => {
+    if (push.type === "reply_ready") ready.push(push.run.id);
+  });
+  const task = await newTask(app, await newProject(app), { message: "Make a small edit [switch-model]" });
+  await waitFor(() => app!.store.listRuns(task.id).length === 2 && ready.length === 1);
+  expect(ready).toEqual([latestRun(app, task.id).id]);
+});
+
 it("rejects unavailable models and leaves the task's settings unchanged", async () => {
   app = await testApp();
   const task = await newTask(app, await newProject(app), { message: "Edit [switch-invalid]" });

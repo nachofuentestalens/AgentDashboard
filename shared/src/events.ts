@@ -39,6 +39,8 @@ export interface StampedEvent {
 export type ServerPush =
   | { type: "run_event"; runId: string; taskId: string; stamped: StampedEvent }
   | { type: "run_updated"; run: Run }
+  // A finished run that nothing automatic carries on from: the owner has a reply to read.
+  | { type: "reply_ready"; run: Run }
   | { type: "task_updated"; task: Task }
   | { type: "task_deleted"; taskId: string; projectId: string }
   | { type: "projects_changed" }

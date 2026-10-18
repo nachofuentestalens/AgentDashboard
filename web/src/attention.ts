@@ -48,12 +48,16 @@ export function useAttention(inbox: Inbox | undefined, alerts: AlertState): void
     (fresh: AttentionItem[], title: string) => {
       if (fresh.length === 0 || alerts !== "on" || document.hasFocus()) return;
       const first = fresh[0]!;
-      const notification = new Notification(title, {
+      // TypeScript's DOM types lack renotify; Chromium browsers support it.
+      const options: NotificationOptions & { renotify: boolean } = {
         body: fresh.length === 1 ? first.text : `${first.text}, and ${fresh.length - 1} more`,
         icon: "/favicon.svg",
-        // One alert at a time: a newer one replaces the last instead of piling up.
+        // One alert at a time: a newer one replaces the last instead of piling up. Without
+        // renotify a replacement is silent, so only the first alert would ever pop up.
         tag: "agentdashboard-attention",
-      });
+        renotify: true,
+      };
+      const notification = new Notification(title, options);
       notification.onclick = () => {
         window.focus();
         void navigate(fresh.length === 1 ? first.url : "/inbox");

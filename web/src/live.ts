@@ -60,8 +60,6 @@ export function useLiveUpdates(qc: QueryClient): Connection {
             return { ...old, runs: exists ? old.runs.map((r) => (r.id === run.id ? run : r)) : [...old.runs, run] };
           });
           if (run.status !== "running") {
-            // Desktop alerts (attention.ts) announce finished turns.
-            if (run.status !== "queued") window.dispatchEvent(new CustomEvent<Run>(RUN_FINISHED, { detail: run }));
             void qc.invalidateQueries({ queryKey: ["task"] });
             // The stored file now holds every event; the buffer is no longer needed.
             setTimeout(() => buffers.delete(run.id), 30_000);
@@ -75,6 +73,10 @@ export function useLiveUpdates(qc: QueryClient): Connection {
           void qc.invalidateQueries({ queryKey: keys.inbox });
           break;
         }
+        case "reply_ready":
+          // Desktop alerts (attention.ts) announce replies the owner has to read.
+          window.dispatchEvent(new CustomEvent<Run>(RUN_FINISHED, { detail: push.run }));
+          break;
         case "task_updated":
           void qc.invalidateQueries({ queryKey: keys.compute });
           qc.setQueryData<TaskDetail>(keys.task(push.task.id), (old) => (old ? { ...old, task: push.task } : old));
