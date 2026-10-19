@@ -35,6 +35,7 @@ const router = createBrowserRouter([
       { path: "/", element: <HomePage /> },
       { path: "/projects/:projectId", element: <ProjectRoute tab="tasks" /> },
       { path: "/projects/:projectId/studio", element: <ProjectRoute tab="studio" /> },
+      { path: "/projects/:projectId/company", element: <ProjectRoute tab="company" /> },
       { path: "/projects/:projectId/docs", element: <ProjectRoute tab="docs" /> },
       { path: "/projects/:projectId/feedback", element: <ProjectRoute tab="feedback" /> },
       { path: "/projects/:projectId/settings", element: <ProjectRoute tab="settings" /> },

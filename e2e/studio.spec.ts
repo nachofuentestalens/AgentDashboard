@@ -12,6 +12,37 @@ async function newProject(request: APIRequestContext, name: string): Promise<str
   return ((await res.json()) as { id: string }).id;
 }
 
+test("save a company brief and enable daily review assignments", async ({ page, request }) => {
+  const projectId = await newProject(request, "Daily company");
+  await page.goto(`/projects/${projectId}/company`);
+  await page.getByLabel("Game description", { exact: true }).fill("Explore a peaceful island and collect fish.");
+  await page.getByLabel("Genre", { exact: true }).fill("Cozy exploration");
+  await page.getByLabel(/^References/).fill("A Short Hike: discovery and pacing");
+  await page.getByLabel(/^How to playtest/).fill("Use the documented local build; record screenshots.");
+  await page.getByLabel(/^Daily review hour/).fill("0");
+  await page.getByRole("button", { name: "Save company", exact: true }).click();
+  await expect(page.getByText("Company saved.")).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Genre", { exact: true })).toHaveValue("Cozy exploration");
+  await expect(page.getByText("No daily assignments yet.")).toBeVisible();
+  await page.getByText("Schedule daily Director and QA reviews", { exact: true }).click();
+  await expect(page.getByLabel("Schedule daily Director and QA reviews")).toBeChecked();
+  await page.getByRole("button", { name: "Save company", exact: true }).click();
+  await expect(page.getByRole("link", { name: /· Director review/ })).toHaveCount(1);
+  await expect(page.getByRole("link", { name: /· QA playtest/ })).toHaveCount(1);
+  await page.reload();
+  await expect(page.getByRole("link", { name: /· Director review/ })).toHaveCount(1);
+  await page.getByText("Schedule daily Director and QA reviews", { exact: true }).click();
+  await expect(page.getByLabel("Schedule daily Director and QA reviews")).not.toBeChecked();
+  await page.getByRole("button", { name: "Save company", exact: true }).click();
+  await expect(page.getByText("Company saved.")).toBeVisible();
+  const company = await (await request.get(`/api/projects/${projectId}/company`)).json();
+  expect(company.config.enabled).toBe(false);
+  expect(company.assignments).toHaveLength(2);
+  // The following studio test asserts the global inbox is empty.
+  await expect.poll(async () => (await request.delete(`/api/projects/${projectId}`)).status()).toBe(204);
+});
+
 test("staff a studio, give a role a task, accept its proposal, watch the queue", async ({ page, request }) => {
   page.on("dialog", (dialog) => void dialog.accept());
   const projectId = await newProject(request, "Lighthouse");
@@ -66,7 +97,11 @@ test("staff a studio, give a role a task, accept its proposal, watch the queue",
 
   // One slot, held by a chat: the role's task waits and says why.
   await page.goto("/compute");
-  await page.getByRole("spinbutton", { name: /^Claude agents at once/ }).fill("1");
+  const claudeLimit = page.getByRole("spinbutton", { name: /^Claude agents at once/ });
+  // Wait for settings hydration before editing, otherwise it can overwrite the in-flight fill.
+  await expect(claudeLimit).toHaveValue(/^\d+$/);
+  await claudeLimit.fill("1");
+  await expect(claudeLimit).toHaveValue("1");
   await page.getByRole("button", { name: "Save limits" }).click();
   await expect(page.getByText("Saved.")).toBeVisible();
   const chat = await request.post(`/api/projects/${projectId}/tasks`, { data: { message: "[slow]" } });

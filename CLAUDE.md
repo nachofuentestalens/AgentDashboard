@@ -16,6 +16,7 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
   - `delivery.ts` / `delivery-plan.ts` / `baseline.ts`: the owner-approved managed baseline (snapshot, task integration previews via `merge-tree`, milestone plan import, enabling automation). Never touches the live checkout; see `docs/DEPENDENCIES.md`.
   - `coordinator.ts`: the pure rules of the project coordinator (provider session/weekly usage levels, the owner's reserve, scheduler holds, pause/resume/start/switch decisions); `coordination.ts` is its service and routes. See `docs/COORDINATOR.md`; change rules there and in its table test.
   - `studio.ts`: the studio service: template, structure views, acting on reply blocks, inbox decisions, compute view, feedback triage. `template.ts`: the default studio.
+  - `company.ts`: opt-in company briefs, initial Director/QA staffing, and durable daily observation assignments. See `docs/COMPANY.md` for scheduling, recovery, and unfinished autonomy phases.
   - `folders.ts`: department folders → Claude Code permission rules. `prompts.ts`: the role preamble and the per-turn studio context. `docs.ts`: design documents under `design/` and their commits.
   - `claude.ts`: finds the CLI (PATH, `claude.exe`, npm `.cmd` shims) and builds its arguments.
   - `git.ts`: repository checks and commits. `fake/fake-claude.mjs`: the stand-in agent for tests and demo mode.

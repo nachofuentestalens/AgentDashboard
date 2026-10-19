@@ -12,11 +12,13 @@ import { DocsTab } from "./DocsTab.tsx";
 import { FeedbackTab } from "./FeedbackTab.tsx";
 import { ProjectSettings } from "./ProjectSettings.tsx";
 import { StudioTab } from "./StudioTab.tsx";
+import { CompanyTab } from "./CompanyTab.tsx";
 
-export type ProjectTab = "tasks" | "studio" | "docs" | "feedback" | "settings";
+export type ProjectTab = "tasks" | "company" | "studio" | "docs" | "feedback" | "settings";
 
 const TABS: { tab: ProjectTab; label: string; path: string }[] = [
   { tab: "tasks", label: "Tasks", path: "" },
+  { tab: "company", label: "Company", path: "/company" },
   { tab: "studio", label: "Studio", path: "/studio" },
   { tab: "docs", label: "Docs", path: "/docs" },
   { tab: "feedback", label: "Feedback", path: "/feedback" },
@@ -54,6 +56,7 @@ export function ProjectPage({ tab }: { tab: ProjectTab }) {
       </header>
       <div className="flex-1 overflow-y-auto">
         {tab === "tasks" && <TasksTab project={p} />}
+        {tab === "company" && <CompanyTab project={p} />}
         {tab === "studio" && <StudioTab project={p} />}
         {tab === "docs" && <DocsTab project={p} />}
         {tab === "feedback" && <FeedbackTab project={p} />}

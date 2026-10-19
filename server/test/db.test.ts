@@ -24,7 +24,7 @@ describe("existing version 5 databases", () => {
         db.exec("PRAGMA user_version = 5");
         migrate(db);
         migrate(db);
-        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 11 });
+        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 12 });
       } finally {
         db.close();
       }

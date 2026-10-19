@@ -81,6 +81,9 @@ Demo checklist (real Claude Code, on Windows):
 
 ## Phase 4: gamedev tools
 
+- [x] Company brief and opt-in daily Director/QA observation assignments with durable scheduling and transcript reports; [scope and remaining phases](COMPANY.md)
+- [ ] Adaptive company staffing, continuous planning, structured playtest evidence, and owner escalation limited to spending/downtime
+
 - [ ] Brainstorm: one prompt to several roles in parallel, each returns proposals
 - [ ] Playtest step: start the game's dev server, Playwright screenshots of configured screens, attached to the run
 - [ ] Simulate step: run the project's sim command, chart its JSON/CSV output
