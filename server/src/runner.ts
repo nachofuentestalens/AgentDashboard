@@ -250,6 +250,9 @@ export class Runner {
     if (task.canEdit && this.store.getWorkspace(taskId)?.mergeCommit)
       throw new RunnerError("This task has been merged. Start a new task for follow-up changes.", 409);
     if (task.stage === "closed") throw new RunnerError("This task is closed. Reopen it before sending a message.", 409);
+    // A run here could never start (approved work is not refreshed) and would block every dependent.
+    if (task.stage === "approved")
+      throw new RunnerError("This task is approved. Start a new task for follow-up work, or move it back to the backlog to change it.", 409);
     this.checkBudget(task);
     // The owner stepped in, so automatic continuation starts counting again.
     if (!auto && task.autoContinues > 0) task = this.store.updateTask(task.id, { autoContinues: 0 })!;
@@ -585,16 +588,13 @@ export class Runner {
       if (!project.autoApprove || !this.deliver || this.isProjectBusy(project.id) || this.store.deliveryPaused(project.id)) continue;
       const tasks = this.store.listTasks(project.id);
       const key = (task: Task) => `${task.id}:${this.store.getWorkspace(task.id)?.checkpointCommit ?? ""}`;
-      const ready = tasks.filter(
-        (t) =>
-          t.roleId &&
-          t.stage === "needs_review" &&
-          t.status === "idle" &&
-          !(t.stepState === "done" && t.nextStep) &&
-          !this.deliveryFailed.has(key(t)) &&
-          this.passedOnCheckpoint(t),
+      const reviewed = tasks.filter(
+        (t) => t.roleId && t.stage === "needs_review" && t.status === "idle" && !(t.stepState === "done" && t.nextStep) && this.passedOnCheckpoint(t),
       );
-      ready.push(...(await this.approvedOutsideBaseline(project.id, tasks)).filter((t) => !this.deliveryFailed.has(key(t))));
+      // A prerequisite that is not accepted yet may clear later; trying now would fail it for good.
+      const ready = [...reviewed, ...(await this.approvedOutsideBaseline(project.id, tasks))].filter(
+        (t) => !this.deliveryFailed.has(key(t)) && !this.store.dependencyBlocker(t),
+      );
       if (ready.length === 0) continue;
       this.deliveryPending.add(project.id);
       if (tasks.some((t) => this.isTaskRunning(t.id))) continue;
@@ -945,6 +945,16 @@ export class Runner {
       const task = this.store.getTask(run.taskId);
       const project = task && this.store.getProject(task.projectId);
       if (task && project && run.purpose === "work") {
+        // Queued before approval was refused at send: it can never start and holds dependents back.
+        if (task.stage === "approved" || task.stage === "closed") {
+          const finished = this.store.finishRun(run.id, {
+            status: "stopped",
+            error: "The task was approved or closed before an agent picked this up. Start a new task.",
+          });
+          if (finished) this.bus.publish({ type: "run_updated", run: finished });
+          this.publishTask(this.store.updateTask(task.id, { status: "idle" }));
+          continue;
+        }
         if (this.isProjectBusy(project.id)) {
           readiness.set(run.id, "Baseline: a delivery operation is running.");
           continue;

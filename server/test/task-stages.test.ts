@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_COORDINATOR_CONFIG, type Task } from "@ad/shared";
+import { DEFAULT_COORDINATOR_CONFIG, type Message, type Run, type Task } from "@ad/shared";
 import type { App } from "../src/app.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -47,6 +47,27 @@ describe("task stages", () => {
     expect((await act(app, task.id, { action: "close" })).body.stage).toBe("closed");
     expect((await api(app, "POST", `/api/tasks/${task.id}/messages`, { text: "more" })).status).toBe(409);
     expect((await act(app, task.id, { action: "reopen" })).body.stage).toBe("backlog");
+  });
+
+  it("refuses messages to approved work and clears runs left queued on it", async () => {
+    const { app, projectId, qa } = await roleProject();
+    const task = await newTask(app, projectId, { roleId: qa.id, message: "check the build" });
+    await stepFinished(app, task.id);
+    expect((await act(app, task.id, { action: "approve" })).body.stage).toBe("approved");
+
+    const refused = await api<{ error: string }>(app, "POST", `/api/tasks/${task.id}/messages`, { text: "Is this ready?" });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/approved/);
+    expect(app.store.getTask(task.id)!.status).toBe("idle");
+
+    // Older servers accepted such a message; its run could never start and held dependents back.
+    const message = app.store.addMessage({ taskId: task.id, role: "user", text: "Is this ready?", runId: null });
+    const runner = app.runner as unknown as { enqueue(task: Task, message: Message, prompt: null): Run };
+    const stuck = runner.enqueue(app.store.getTask(task.id)!, message, null);
+    app.runner.tick();
+    await waitFor(() => app.store.getRun(stuck.id)!.status === "stopped");
+    expect(app.store.getRun(stuck.id)!.error).toMatch(/approved or closed/);
+    expect(app.store.getTask(task.id)).toMatchObject({ stage: "approved", status: "idle" });
   });
 
   it("refuses moves the stage does not allow, and actions on chats", async () => {
