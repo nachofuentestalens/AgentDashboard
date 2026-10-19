@@ -1,4 +1,6 @@
 import type {
+  CompanyConfig,
+  CompanyView,
   WorkspaceCleanupPreview,
   RestartStatus,
   BaselinePreview,
@@ -70,6 +72,8 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 type Saved = { commitError: string | null };
 
 export const api = {
+  company: (id: string) => request<CompanyView>("GET", `/api/projects/${id}/company`),
+  saveCompany: (id: string, config: CompanyConfig) => request<CompanyView>("PUT", `/api/projects/${id}/company`, config),
   restartStatus: () => request<RestartStatus>("GET", "/api/server/restart"),
   requestRestart: () => request<RestartStatus>("POST", "/api/server/restart/request"),
   cancelRestart: () => request<RestartStatus>("POST", "/api/server/restart/cancel"),
@@ -154,6 +158,7 @@ export const api = {
 };
 
 export const keys = {
+  company: (id: string) => ["company", id] as const,
   settings: ["settings"] as const,
   projects: ["projects"] as const,
   project: (id: string) => ["project", id] as const,

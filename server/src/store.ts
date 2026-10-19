@@ -14,6 +14,9 @@ import {
   PROVIDERS,
   taskGitState,
   type Provider,
+  type CompanyConfig,
+  type CompanyAssignment,
+  type CompanyAssignmentKind,
   type ProviderLimits,
   type Agent,
   type Autonomy,
@@ -316,6 +319,83 @@ export interface NewTask {
 // All SQL lives here. Callers get typed objects and never see rows.
 export class Store {
   constructor(readonly db: Db) {}
+
+  companyConfig(projectId: string): CompanyConfig | null {
+    const row = this.db.prepare("SELECT config FROM companies WHERE project_id = ?").get(projectId) as Row | undefined;
+    return row ? parseJson<CompanyConfig | null>(row.config, null) : null;
+  }
+
+  saveCompanyConfig(projectId: string, config: CompanyConfig): void {
+    this.db
+      .prepare("INSERT INTO companies(project_id, config) VALUES (?, ?) ON CONFLICT(project_id) DO UPDATE SET config = excluded.config, error = NULL")
+      .run(projectId, JSON.stringify(config));
+  }
+
+  companyError(projectId: string): string | null {
+    return str((this.db.prepare("SELECT error FROM companies WHERE project_id = ?").get(projectId) as Row | undefined)?.error);
+  }
+
+  setCompanyError(projectId: string, error: string | null): void {
+    this.db.prepare("UPDATE companies SET error = ? WHERE project_id = ?").run(error, projectId);
+  }
+
+  companyAssignments(projectId: string, pending = false): CompanyAssignment[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM company_assignments WHERE project_id = ? ${pending ? "AND dispatched = 0 AND task_id IS NOT NULL" : ""} ORDER BY day DESC, kind LIMIT 60`,
+      )
+      .all(projectId) as Row[];
+    return rows.map((r) => ({
+      day: String(r.day),
+      kind: r.kind as CompanyAssignmentKind,
+      taskId: str(r.task_id),
+      prompt: String(r.prompt),
+      dispatched: !!r.dispatched,
+    }));
+  }
+
+  createCompanyAssignment(projectId: string, day: string, kind: CompanyAssignmentKind, roleId: string, prompt: string): Task | null {
+    return transaction(this.db, () => {
+      if (this.db.prepare("SELECT 1 FROM company_assignments WHERE project_id = ? AND day = ? AND kind = ?").get(projectId, day, kind)) return null;
+      // A delayed or unanswered session must not accumulate another daily copy.
+      if (
+        this.db
+          .prepare(
+            `SELECT 1 FROM company_assignments c JOIN tasks t ON t.id = c.task_id
+        WHERE c.project_id = ? AND c.kind = ? AND (c.dispatched = 0 OR t.status IN ('queued', 'running', 'waiting'))`,
+          )
+          .get(projectId, kind)
+      )
+        return null;
+      const task = this.createTask({
+        projectId,
+        roleId,
+        title: `${kind === "director" ? "Director daily review" : "QA daily playtest"} — ${day}`,
+        canEdit: false,
+        model: null,
+        effort: null,
+        priority: kind === "director" ? 7 : 6,
+      });
+      this.db
+        .prepare("INSERT INTO company_assignments(project_id, day, kind, task_id, prompt) VALUES (?, ?, ?, ?, ?)")
+        .run(projectId, day, kind, task.id, prompt);
+      return task;
+    });
+  }
+
+  dispatchCompanyAssignment(projectId: string, assignment: CompanyAssignment, send: () => void): void {
+    transaction(this.db, () => {
+      const row = this.db
+        .prepare("SELECT dispatched FROM company_assignments WHERE project_id = ? AND day = ? AND kind = ?")
+        .get(projectId, assignment.day, assignment.kind) as Row | undefined;
+      if (!row || row.dispatched || !assignment.taskId) return;
+      // An owner may already have started this task between creation and recovery.
+      if (!this.listRuns(assignment.taskId).length) send();
+      this.db
+        .prepare("UPDATE company_assignments SET dispatched = 1 WHERE project_id = ? AND day = ? AND kind = ?")
+        .run(projectId, assignment.day, assignment.kind);
+    });
+  }
 
   projectBaseline(projectId: string): ProjectBaseline | null {
     return this.getStateJson<ProjectBaseline>(`baseline.${projectId}`);

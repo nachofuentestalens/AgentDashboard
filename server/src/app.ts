@@ -32,6 +32,7 @@ import { registerStudioRoutes } from "./studio-routes.ts";
 import { Coordinator, registerCoordinatorRoutes } from "./coordination.ts";
 import type { UsageFetcher } from "./usage.ts";
 import { ServerRestart } from "./restart.ts";
+import { Company, registerCompanyRoutes } from "./company.ts";
 
 export interface AppOptions {
   restart?: () => void;
@@ -50,6 +51,7 @@ export interface App {
   store: Store;
   runner: Runner;
   studio: Studio;
+  company: Company;
   bus: Bus;
   close: () => Promise<void>;
 }
@@ -76,6 +78,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   const bus = new Bus();
   const runner = new Runner(store, bus, options.dataDir, options.launchers);
   const studio = new Studio(store, bus, runner);
+  const company = new Company(store, runner, studio, bus);
   const coordinator = new Coordinator(store, bus, runner, Date.now, options.usage ?? null);
   coordinator.startUsagePolling();
   store.markInterrupted();
@@ -111,6 +114,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   const projectsChanged = () => bus.publish({ type: "projects_changed" });
 
   // ---- settings
+  registerCompanyRoutes(app, company);
 
   app.get("/api/server/restart", async () => restart.status());
   app.post("/api/server/restart/request", async () => restart.request());
@@ -390,6 +394,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   }
 
   // Runs queued before a restart are still waiting for their turn.
+  company.start();
   runner.tick();
 
   return {
@@ -397,8 +402,10 @@ export async function buildApp(options: AppOptions): Promise<App> {
     store,
     runner,
     studio,
+    company,
     bus,
     close: async () => {
+      company.close();
       restart.close();
       coordinator.stopUsagePolling();
       runner.close();

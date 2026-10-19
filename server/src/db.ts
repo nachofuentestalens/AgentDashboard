@@ -281,6 +281,21 @@ const MIGRATIONS: (string | ((db: Db) => void))[] = [
   `UPDATE tasks SET token_budget = NULL, tool_budget = NULL;
    INSERT INTO settings (key, value) VALUES ('defaultTokenBudget', ''), ('defaultToolBudget', '')
      ON CONFLICT(key) DO UPDATE SET value = excluded.value;`,
+  // 12: Durable company brief and daily assignment outbox; deleted tasks retain their daily slot.
+  `CREATE TABLE IF NOT EXISTS companies (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    config TEXT NOT NULL,
+    error TEXT
+  );
+  CREATE TABLE IF NOT EXISTS company_assignments (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('director', 'qa')),
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    prompt TEXT NOT NULL,
+    dispatched INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(project_id, day, kind)
+  );`,
 ];
 
 export type Db = DatabaseSync;
