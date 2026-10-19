@@ -71,3 +71,17 @@ After the Claude session reset, the coordinator was in auto mode with Claude at 
 The repair stopped the queued run, merged the baseline into M1-07's worktree with `--no-commit`, and took the baseline's version of both files with M1-07's `zod` additions re-applied. `npm install --package-lock-only` left the lockfile content unchanged. The dashboard then recorded the merge through `POST /api/tasks/:id/checkpoint`, giving checkpoint `3bdded08` with parents `9a825b0` and `1c659bc`, published to draft PR #5. The run was then retried. A merge made through the checkpoint endpoint keeps the "branch changed outside the dashboard" guard satisfied. A plain `git commit` in the worktree would not.
 
 With `maxConcurrentRuns` at 1, any running owner chat takes the only slot, so queued milestone work waits for it.
+
+## Self-planning milestones: 2026-10-19
+
+All 16 M1 tasks were approved and integrated (M1-16 accepted the milestone), so start-next had no backlog left. The approved follow-up "server-computed effectiveStats" (`e4dc20cd`) had never been integrated. It merged cleanly, giving baseline `4c19eca`.
+
+The studio now plans its own milestones:
+
+- A **Producer** role (Leadership, reviewed by the Game Director) owns milestone documents (`design/studio/milestones/<ID>.md`) and their task graph. Task blocks can only reference existing task IDs, so it creates tasks in waves. Each wave ends the step as `partial`; on resume it reads the new IDs through the read-only task list API. Every milestone task depends on its planning task and requires the milestone document, so nothing starts before the plan is reviewed and integrated.
+- Each milestone ends with a Game Director acceptance task, then a Producer "Plan milestone <next>" task.
+- The Game Director's brief is no longer M1-specific. It now keeps vision and priorities and gives acceptance verdicts. It leaves task creation to the Producer, except for at most 3 fix tasks.
+- Leadership autonomy is `auto`, so Leadership task blocks create tasks directly. Other departments still send theirs to the Inbox.
+- Owner-created task `20af9394` "[M2-00] Plan milestone M2" is queued for the Producer.
+
+Delegation depth is capped at 2. M2 tasks and the M3 planning task are depth 1, and M3 tasks are depth 2. Tasks proposed by the M4 planning task therefore wait in the Inbox for owner approval. Starting a milestone's planning task as the owner resets the depth.
