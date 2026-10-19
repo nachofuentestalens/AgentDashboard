@@ -85,3 +85,11 @@ The studio now plans its own milestones:
 - Owner-created task `20af9394` "[M2-00] Plan milestone M2" is queued for the Producer.
 
 Delegation depth is capped at 2. M2 tasks and the M3 planning task are depth 1, and M3 tasks are depth 2. Tasks proposed by the M4 planning task therefore wait in the Inbox for owner approval. Starting a milestone's planning task as the owner resets the depth.
+
+## Game folder synced: 2026-10-19
+
+The approved baseline `4c19eca` was merged into the game folder's `main` (`fade6b6`) and pushed to `origin/main` as a fast-forward. `design/studio/contracts.md` conflicted add/add; `main`'s version was kept because it is the baseline's text plus the accepted effectiveStats proposal. 23 untracked files were superseded by the baseline (21 identical, plus older drafts of `README.md` and `.gitignore`). They were copied to `D:/Personal/B&B-premerge-backup-2026-10-19` before removal.
+
+The folder name `B&B` breaks npm's Windows `.cmd` shims (`'B\node_modules\.bin\' is not recognized`), so `npm run build` fails under the default cmd script shell. Build with `npm_config_script_shell="C:/Program Files/Git/bin/bash.exe"`; `npm start` runs `node` directly and works as-is.
+
+The first M2 planning wave created M2-01, M2-07 and M2-08 without dependencies on the planning task, despite the Producer brief. M2-01 ran before the plan was approved. Later waves should depend on earlier M2 tasks.
