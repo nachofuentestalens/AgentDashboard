@@ -44,7 +44,7 @@ import { modelRoutingInstructions, parseModelReview, validateModelReview } from 
 import { Workspaces } from "./workspaces.ts";
 import { WorkspaceCleanup } from "./workspace-cleanup.ts";
 import { Github } from "./github.ts";
-import { baselineBlocker } from "./readiness.ts";
+import { baselineBlocker, dependencyBlockedQueue } from "./readiness.ts";
 
 export class RunnerError extends HttpError {}
 
@@ -746,6 +746,7 @@ export class Runner {
     const writers = new Set<string>();
     const add = <K>(m: Map<K, number>, k: K) => m.set(k, (m.get(k) ?? 0) + 1);
     for (const run of [...this.store.runsWithStatus("queued"), ...this.store.runsWithStatus("running")]) {
+      if (dependencyBlockedQueue(this.store, run)) continue;
       add(providerLoad, run.status === "running" ? run.provider : this.runProvider(run));
       if (!run.roleId) continue;
       add(roleLoad, run.roleId);

@@ -56,6 +56,8 @@ Assignment sets the task's provider, clears its provider-specific model, and pre
 
 Provider assignment does not bypass scheduler slots, role staffing, budgets, dependency readiness, or managed-baseline integration. For example, a task waiting for approved contract changes to reach its baseline still waits even when Codex has room.
 
+Queued work waiting for prerequisite approval or checkpoint readiness does not reserve provider capacity, role staffing, or department writer slots during automatic starts. The coordinator excludes those runs from its queued load, provider assignment and fill-idle decisions, so it can find ready work instead. The runs remain visible in the compute queue with their dependency wait reasons; current dependency state is checked again each pass, including after approval. Reviews and running work still count normally. Subscription usage readings are unchanged.
+
 Plain chats are the owner's own use. The coordinator never holds or pauses them.
 
 Modes: **off** only shows usage. **advise** lists decisions; the owner clicks Apply, and the server applies only a decision the rules still make. **auto** applies them; an automatic decision is not repeated for 5 minutes. Holds are reported as the queued run's wait reason, starting with `Coordinator:`, and "Run anyway" overrides them like a budget hold.

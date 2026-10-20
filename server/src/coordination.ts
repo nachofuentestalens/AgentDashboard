@@ -35,6 +35,7 @@ import type { Runner } from "./runner.ts";
 import type { ProviderHold } from "./scheduler.ts";
 import type { Store } from "./store.ts";
 import type { UsageFetcher } from "./usage.ts";
+import { dependencyBlockedQueue } from "./readiness.ts";
 
 const CONFIG_KEY = "coordinator.config";
 const READINGS_KEY = "coordinator.readings";
@@ -162,7 +163,7 @@ export class Coordinator implements RunCoordinator {
   private providerStates(config: CoordinatorConfig, now: number): ProviderQuotaView[] {
     const readings = this.readings();
     const running = this.runner.activeRuns().flatMap((a) => this.store.getRun(a.runId) ?? []);
-    const queued = this.store.runsWithStatus("queued");
+    const queued = this.store.runsWithStatus("queued").filter((run) => !dependencyBlockedQueue(this.store, run));
     return PROVIDERS.map(({ id: provider }) => {
       const tokensSince = (ms: number) => this.store.providerTokensSince(provider, new Date(ms).toISOString());
       const window = (w: QuotaWindow) =>
@@ -198,6 +199,7 @@ export class Coordinator implements RunCoordinator {
     }
     const queued: CoordinatorInput["queued"] = [];
     for (const run of this.store.runsWithStatus("queued")) {
+      if (dependencyBlockedQueue(this.store, run)) continue;
       const t = ref(run.taskId);
       // Work the owner paused waits for them, not for a provider.
       if (!t || (!run.forced && this.store.getProject(t.task.projectId)?.automationPaused)) continue;
