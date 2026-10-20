@@ -79,6 +79,19 @@ describe("task stages", () => {
     expect((await act(app, parent.id, { action: "approve", force: true })).body.stage).toBe("approved");
   });
 
+  it("does not hold approval for delegated follow-ups that wait on the parent itself", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/departments/${qa.departmentId}`, { autonomy: "auto" });
+    const parent = await newTask(app, projectId, { roleId: qa.id, message: "Found issue [task:Gameplay Programmer:8]" });
+    await stepFinished(app, parent.id);
+    const child = app.store.listTasks(projectId).find((t) => t.parentTaskId === parent.id);
+    if (!child) return expect.fail("no delegated task was created");
+    await stepFinished(app, child.id);
+    // Waiting on the parent's approval while the parent waits on it would deadlock hands-off delivery.
+    app.store.updateTask(child.id, { dependencyIds: [parent.id] });
+    expect((await act(app, parent.id, { action: "approve" })).body.stage).toBe("approved");
+  });
+
   it("reads the agent's step block: done waits for review, partial keeps working", async () => {
     const { app, projectId, qa } = await roleProject();
     const task = await newTask(app, projectId, { roleId: qa.id, message: "add dash [step-done]" });
