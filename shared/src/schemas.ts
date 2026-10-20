@@ -12,6 +12,7 @@ export const modelId = z
 const defaultModel = modelId.or(z.literal(""));
 export const effort = z.enum(EFFORT_LEVELS);
 export const provider = z.enum(PROVIDERS.map((p) => p.id) as ["claude", "codex"]);
+export const modelHoldBody = z.object({ provider, model: defaultModel, paused: z.boolean() });
 export const toolRule = z
   .string()
   .trim()

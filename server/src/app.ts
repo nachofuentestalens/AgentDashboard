@@ -3,6 +3,7 @@ import path from "node:path";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import {
+  modelHoldBody,
   createProjectBody,
   compactTaskBody,
   createTaskBody,
@@ -127,6 +128,12 @@ export async function buildApp(options: AppOptions): Promise<App> {
 
   app.get("/api/settings", async () => store.getSettings());
   app.get("/api/models", async () => modelCatalog);
+  app.get("/api/model-holds", async () => runner.modelHolds());
+  app.put("/api/model-holds", async (request, reply) => {
+    const body = parse(modelHoldBody, request.body, reply);
+    if (!body) return;
+    return runner.setModelHold(body.provider, body.model, body.paused);
+  });
 
   app.patch("/api/settings", async (request, reply) => {
     const body = parse(updateSettingsBody, request.body, reply);
