@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { inboxKeys, type Inbox, type Project, type Studio } from "@ad/shared";
 import type { App } from "../src/app.ts";
+import { MAX_RETRIES } from "../src/health.ts";
 import { STEWARD_ROLE } from "../src/steward.ts";
 import { api, newProject, newTask, testApp, waitFor } from "./helpers.ts";
 
@@ -78,4 +79,39 @@ describe("inbox steward", () => {
     expect(app.store.stewardItems({ projectId })).toEqual([]);
     expect(app.store.findRoleByName(projectId, STEWARD_ROLE)).toBeNull();
   });
+});
+
+describe("inbox steward health watch", () => {
+  it("retries a failing task, stops retrying at the cap and escalates what it cannot fix", async () => {
+    const { app, projectId, role } = await stewardProject();
+    const task = await newTask(app, projectId, { roleId: role("Systems Designer").id, title: "Broken pass", message: "[fail]" });
+    // The fake steward retries while it may, then reports; with no dashboard project the report escalates.
+    await waitFor(() => app.store.stewardItems({ projectId, status: "escalated" }).some((i) => i.kind === "failing"), 60_000);
+    const failing = app.store.stewardItems({ projectId }).filter((i) => i.kind === "failing");
+    expect(failing.filter((i) => i.action === "retry")).toHaveLength(MAX_RETRIES - 1);
+    expect(app.store.listRuns(task.id).filter((r) => r.status === "failed")).toHaveLength(MAX_RETRIES);
+
+    const inbox = (await api<Inbox>(app, "GET", "/api/inbox")).body;
+    expect(inbox.alerts).toHaveLength(1);
+    expect(inbox.alerts[0]!.note).toContain("no project uses the AgentDashboard repository");
+    expect(inbox.count).toBe(1);
+
+    const key = inbox.alerts[0]!.key;
+    expect((await api(app, "POST", `/api/projects/${projectId}/steward/alerts/dismiss`, { key })).status).toBe(204);
+    expect((await api<Inbox>(app, "GET", "/api/inbox")).body.alerts).toEqual([]);
+    expect((await api(app, "POST", `/api/projects/${projectId}/steward/alerts/dismiss`, { key })).status).toBe(404);
+  }, 90_000);
+
+  it("files a fix on the dashboard's own project when the cause is the dashboard", async () => {
+    const { app, projectId, role } = await stewardProject();
+    const dashboardId = await newProject(app);
+    app.steward.dashboardRepo = app.store.getProject(dashboardId)!.repoPath;
+    await newTask(app, projectId, { roleId: role("Systems Designer").id, title: "Broken pass", message: "[fail]" });
+    await waitFor(() => app.store.stewardItems({ projectId }).some((i) => i.kind === "failing" && i.action === "report" && i.status === "handled"), 60_000);
+    const fixes = app.store.listTasks(dashboardId);
+    expect(fixes).toHaveLength(1);
+    expect(fixes[0]!.title).toMatch(/^Dashboard fix: "Broken pass" failed/);
+    expect(fixes[0]!.roleId).toBeNull();
+    expect(app.store.listMessages(fixes[0]!.id)[0]!.text).toContain("The run fails before the agent starts.");
+  }, 90_000);
 });

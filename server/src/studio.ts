@@ -15,6 +15,7 @@ import {
   type Run,
   type StewardItem,
   type StewardItemKind,
+  isHealthKind,
   type Studio as StudioView,
   type Task,
 } from "@ad/shared";
@@ -340,7 +341,7 @@ export class Studio implements ReplyHandler {
   // ---- the owner's inbox
 
   // Every waiting item, before the inbox steward takes its share.
-  allInbox(): Omit<Inbox, "steward" | "stewardNotes" | "count"> {
+  allInbox(): Omit<Inbox, "steward" | "stewardNotes" | "alerts" | "count"> {
     const projects = new Map(this.store.listProjects().map((p) => [p.id, p]));
     const name = (id: string) => projects.get(id)?.name ?? "?";
     const proposals = this.store.pendingProposals().map((p) => {
@@ -402,8 +403,9 @@ export class Studio implements ReplyHandler {
         .slice(0, 20)
         .map(named),
     };
-    const count = proposals.length + handoffs.length + questions.length + reviews.length + changes.length + held.length + blocked.length;
-    return { proposals, handoffs, questions, reviews, changes, held, blocked, steward, stewardNotes, count };
+    const alerts = items.filter((i) => i.status === "escalated" && isHealthKind(i.kind) && projects.get(i.projectId)?.inboxSteward).map(named);
+    const count = proposals.length + handoffs.length + questions.length + reviews.length + changes.length + held.length + blocked.length + alerts.length;
+    return { proposals, handoffs, questions, reviews, changes, held, blocked, alerts, steward, stewardNotes, count };
   }
 
   private pendingProposal(id: string): { proposal: Proposal; repo: string } {

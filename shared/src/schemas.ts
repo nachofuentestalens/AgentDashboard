@@ -269,3 +269,7 @@ export const quotaReadingBody = z.object({
 export const applyCoordinatorBody = z.object({ key: z.string().min(1).max(200) });
 export type CoordinatorConfigBody = z.infer<typeof coordinatorConfigBody>;
 export type QuotaReadingBody = z.infer<typeof quotaReadingBody>;
+
+// The owner dismisses a project health alert the inbox steward escalated.
+export const dismissAlertBody = z.object({ key: z.string().trim().min(1).max(300) }).strict();
+export type DismissAlertBody = z.infer<typeof dismissAlertBody>;

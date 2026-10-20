@@ -11,6 +11,7 @@ export interface AttentionItem {
 // Everything in the inbox, as one line each, for notifications.
 export function attentionItems(inbox: Inbox): AttentionItem[] {
   return [
+    ...inbox.alerts.map((a) => ({ key: `alert:${a.projectId}:${a.key}`, text: `${a.projectName}: ${a.title}`, url: "/inbox" })),
     ...inbox.questions.map((q) => ({
       key: inboxKeys.question(q.task),
       text: `Question from "${q.task.title}"`,

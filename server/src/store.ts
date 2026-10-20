@@ -476,6 +476,15 @@ export class Store {
       .run(status, action, note.slice(0, 2000), now(), projectId, key);
   }
 
+  // An escalated health concern leaves the owner's inbox once it clears or the owner dismisses it.
+  clearStewardAlert(projectId: string, key: string, note: string): boolean {
+    return (
+      this.db
+        .prepare("UPDATE steward_items SET status = 'handled', note = ?, decided_at = ? WHERE project_id = ? AND item_key = ? AND status = 'escalated'")
+        .run(note.slice(0, 2000), now(), projectId, key).changes > 0
+    );
+  }
+
   projectBaseline(projectId: string): ProjectBaseline | null {
     return this.getStateJson<ProjectBaseline>(`baseline.${projectId}`);
   }
