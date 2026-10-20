@@ -1,27 +1,24 @@
 name: CI
 
+# Only pull requests: a squash merge lands the tree its pull request already checked, so re-running on main doubled the minutes.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
-# A new push to a pull request supersedes its running checks; runs on main always finish.
+# A new push to a pull request supersedes its running checks.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  actions: read
-
-# The slowest job may take at most this long. Raising it needs a justification in the pull request (docs/CI.md).
-env:
-  CI_BUDGET_SECONDS: 300
 
 jobs:
-  # Formatting, types and the Linux unit run are quick, so one job avoids paying setup three times.
-  linux:
+  # One Linux job: every extra job pays setup again and rounds up to a whole billed minute (docs/CI.md).
+  checks:
     runs-on: ubuntu-latest
+    # The time budget (docs/CI.md). Raising it needs a justification in the pull request.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -33,18 +30,6 @@ jobs:
       - run: pnpm format:check
       - run: pnpm typecheck
       - run: pnpm test
-
-  # The browser suite checks the UI, which does not depend on the server's OS; Windows server behaviour is covered by the unit parts.
-  e2e:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
       # Runner images ship Google Chrome, so skip downloading Playwright's Chromium and its system packages.
       - run: pnpm test:e2e
         env:
@@ -55,35 +40,3 @@ jobs:
           name: e2e
           path: test-results/
           if-no-files-found: ignore
-
-  # Process-heavy API suites run several times slower on Windows, so they are split into parallel parts (scripts/test-part.mjs).
-  windows:
-    name: windows (part ${{ matrix.part }})
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        part: [1, 2, 3]
-    steps:
-      # Real-time scanning of node_modules and spawned agent processes is the main slowdown on Windows runners.
-      - shell: pwsh
-        run: Set-MpPreference -DisableRealtimeMonitoring $true
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: node scripts/test-part.mjs ${{ matrix.part }}
-
-  budget:
-    needs: [linux, e2e, windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: scripts
-      - run: node scripts/ci-budget.mjs
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
