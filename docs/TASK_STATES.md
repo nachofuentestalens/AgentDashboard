@@ -65,7 +65,7 @@ Rules that are not shown in the diagram:
 - **Close** from `approved` is the usual path. The owner can also close (drop) a task from any other stage except `in_review`, while
   no agent is running. `PATCH {done: true}` on `needs_review` approves and then closes.
 - `done` stays in `TaskStatus` for plain chats only (Mark done). Role tasks never get it.
-- A parent task cannot be approved while it has open child tasks (delegated work). The owner gets a 409 response with the list, or the choice to "approve anyway".
+- A parent task cannot be approved while it has open child tasks (delegated work). The owner gets a 409 response with the list, or the choice to "approve anyway". Children that depend (directly or transitively) on the parent do not count: they cannot start until it is approved, so counting them would deadlock.
 
 The transitions live in one pure function, `server/src/stages.ts` (`nextStage(stage, event) → stage | error`), tested from a table in
 the same way as `scheduler.ts`. `runner.ts` and the routes call it and never set `stage` directly.

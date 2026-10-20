@@ -923,7 +923,8 @@ export class Store {
     return (rows as Row[]).map(toTask);
   }
 
-  // Delegated work under a task that the owner has not approved or closed yet.
+  // Delegated work under a task that the owner has not approved or closed yet. Follow-ups that
+  // depend on the task itself are left out: they cannot start before its approval.
   openChildTasks(taskId: string): Task[] {
     const rows = this.db
       .prepare(
@@ -931,7 +932,18 @@ export class Store {
          ORDER BY created_at`,
       )
       .all(taskId) as Row[];
-    return rows.map(toTask);
+    return rows.map(toTask).filter((t) => !this.dependsOn(t, taskId));
+  }
+
+  private dependsOn(task: Task, prerequisiteId: string, seen = new Set<string>()): boolean {
+    for (const id of task.dependencyIds) {
+      if (id === prerequisiteId) return true;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const upstream = this.getTask(id);
+      if (upstream && this.dependsOn(upstream, prerequisiteId, seen)) return true;
+    }
+    return false;
   }
 
   addTaskReview(input: Omit<TaskReview, "id" | "createdAt">): TaskReview {
