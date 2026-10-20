@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { api, keys } from "../api.ts";
+import { ModelHolds } from "./ModelHolds.tsx";
 import { ModelActivity } from "./ModelActivity.tsx";
 
 function resetHint(resetsAt: string | null | undefined): string {
@@ -54,6 +55,10 @@ export function SessionUsage() {
                 {session?.source === "estimate" ? ". Usage is estimated." : session?.source === "reset" ? ". Reset since the last reading." : ""}
               </span>
             </Link>
+            <ModelHolds
+              provider={provider}
+              runs={[...(compute.data?.active ?? []), ...(compute.data?.queued ?? [])].filter((row) => row.run.provider === provider)}
+            />
             <ModelActivity
               label={label}
               active={compute.data?.active.filter((row) => row.run.provider === provider) ?? []}

@@ -13,6 +13,7 @@ import {
   PROVIDERS,
   MODEL_PRESETS,
   type ModelOption,
+  type ModelHold,
   resolveChoice,
   type AgentEvent,
   type Choice,
@@ -411,6 +412,45 @@ export class Runner {
     return task.roleId ? this.enqueue(task, message, prompt, previous.purpose) : this.startNow(task, message, prompt, previous.purpose);
   }
 
+  modelHolds(): ModelHold[] {
+    return this.store.getStateJson<ModelHold[]>("models.holds") ?? [];
+  }
+
+  private modelHeld(provider: Provider, model: string | null): boolean {
+    return this.modelHolds().some((hold) => hold.provider === provider && hold.model === (model ?? ""));
+  }
+
+  setModelHold(provider: Provider, model: string, paused: boolean): ModelHold[] {
+    const holds = this.modelHolds().filter((hold) => hold.provider !== provider || hold.model !== model);
+    if (paused) holds.push({ provider, model });
+    this.store.setStateJson("models.holds", holds);
+    if (paused) {
+      const stopped = this.store.getStateJson<string[]>("models.pausedRuns") ?? [];
+      for (const run of this.store.runsWithStatus("running")) {
+        if (run.provider === provider && run.model === model && this.stop(run.id, "Model paused by you.")) stopped.push(run.id);
+      }
+      this.store.setStateJson("models.pausedRuns", [...new Set(stopped)]);
+    }
+    this.tick();
+    return holds;
+  }
+
+  private async resumeModelRuns(): Promise<void> {
+    for (const id of this.store.getStateJson<string[]>("models.pausedRuns") ?? []) {
+      const run = this.store.getRun(id);
+      if (run && (run.status === "running" || this.modelHeld(run.provider, run.model))) continue;
+      const remaining = (this.store.getStateJson<string[]>("models.pausedRuns") ?? []).filter((value) => value !== id);
+      this.store.setStateJson("models.pausedRuns", remaining);
+      if (!run || this.store.listRuns(run.taskId).at(-1)?.id !== id || !["stopped", "interrupted"].includes(run.status)) continue;
+      try {
+        await this.retry(id);
+      } catch (error) {
+        // Budget or workflow changes can require the owner's attention before retrying.
+        console.warn("Could not resume paused model run:", (error as Error).message);
+      }
+    }
+  }
+
   // Stops an active run, or takes a queued one out of the queue.
   // reason: recorded as the run's error, for stops the owner did not make.
   stop(runId: string, reason?: string): boolean {
@@ -578,6 +618,7 @@ export class Runner {
     setImmediate(async () => {
       try {
         if (this.closed || this.restartHeld) return;
+        await this.resumeModelRuns();
         await this.deliverReviewed();
         if (this.closed || this.restartHeld) return;
         this.startIdleBacklog();
@@ -980,7 +1021,7 @@ export class Runner {
       model: model ?? "",
       effort,
       sessionId: task.sessionId,
-      status: "running",
+      status: "queued",
       prompt: prompt === message.text ? null : prompt,
     });
     this.store.setRunPurpose(run.id, purpose);
@@ -992,6 +1033,7 @@ export class Runner {
     const readiness = new Map<string, string | null>();
     for (const run of this.store.runsWithStatus("queued")) {
       const task = this.store.getTask(run.taskId);
+      if (task && this.modelHeld(this.choice(this.actorTask(task, run)).provider, this.choice(this.actorTask(task, run)).model)) continue;
       const project = task && this.store.getProject(task.projectId);
       if (task && project && run.purpose === "work") {
         // The scheduler holds it for the pause; its Git checks can wait until the project resumes.
@@ -1056,6 +1098,17 @@ export class Runner {
     for (const run of queuedRuns) {
       const task = this.store.getTask(run.taskId);
       const role = run.roleId ? roles.get(run.roleId) : undefined;
+      if (task) {
+        const choice = this.choice(this.actorTask(task, run));
+        if (this.modelHeld(choice.provider, choice.model)) {
+          this.holdModelRun(run);
+          continue;
+        }
+        if (!task.roleId && !run.roleId) {
+          this.launch(run.id, null);
+          continue;
+        }
+      }
       if (!task || !role) {
         const finished = this.store.finishRun(run.id, { status: "stopped", error: "The role of this task was removed before an agent picked it up." });
         if (finished) this.bus.publish({ type: "run_updated", run: finished });
@@ -1180,6 +1233,15 @@ export class Runner {
     }
   }
 
+  private holdModelRun(run: Run): Run {
+    const reason = "Model paused by you. Resume it in the sidebar to continue.";
+    if (run.waitReason === reason) return run;
+    const held = this.store.setWaitReason(run.id, reason)!;
+    this.bus.publish({ type: "run_updated", run: held });
+    this.publishTask(this.store.updateTask(run.taskId, { status: "queued" }));
+    return held;
+  }
+
   private launchRun(runId: string, agentId: string | null): Run {
     const queuedRun = this.store.getRun(runId)!;
     const task = this.store.getTask(queuedRun.taskId)!;
@@ -1196,6 +1258,7 @@ export class Runner {
     const reviewing = queuedRun.purpose === "review";
     const actor = this.actorTask(task, queuedRun);
     const { provider, model, effort, roleCanEdit } = this.choice(actor);
+    if (this.modelHeld(provider, model)) return this.holdModelRun(queuedRun);
     const cli = provider === "codex" ? CODEX_CLI : CLAUDE_CLI;
     const canEdit = actor.canEdit && roleCanEdit && queuedRun.purpose === "work";
     if (canEdit && this.store.getWorkspace(task.id)?.mergeCommit) throw new RunnerError("This task was merged. Create a new task for follow-up work.", 409);
@@ -1587,6 +1650,10 @@ export class Runner {
         return this.store.getRun(run.id)!;
       }
 
+      if (active.stopRequested) {
+        await settle(null);
+        return;
+      }
       const child = spawn(launcher.command, [...launcher.prefix, ...args], {
         cwd,
         env: process.env,

@@ -18,6 +18,11 @@ export const PROVIDER_EFFORTS: Record<Provider, readonly Effort[]> = {
   codex: ["minimal", "low", "medium", "high", "xhigh"],
 };
 
+export interface ModelHold {
+  provider: Provider;
+  model: string;
+}
+
 export interface ModelOption {
   id: string;
   label: string;

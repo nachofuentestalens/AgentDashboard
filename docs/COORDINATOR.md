@@ -61,3 +61,11 @@ Plain chats are the owner's own use. The coordinator never holds or pauses them.
 Modes: **off** only shows usage. **advise** lists decisions; the owner clicks Apply, and the server applies only a decision the rules still make. **auto** applies them; an automatic decision is not repeated for 5 minutes. Holds are reported as the queued run's wait reason, starting with `Coordinator:`, and "Run anyway" overrides them like a budget hold.
 
 The activity log is in memory, holds the last 50 entries, and is cleared on restart.
+
+## Manual model holds
+
+The shared sidebar has **Model controls** under each provider. Select a model and click **Pause model** to stop its running dashboard work through the normal checkpoint path and hold future launches, including chats, reviews, retries and model-switch continuations. Other models remain available. These holds apply in every coordinator mode and cannot be bypassed with Run anyway or emergency priority.
+
+**Resume model** releases queued work and retries the latest stopped attempt for each task paused by that control. Newer owner activity supersedes an old paused attempt. Existing budget, staffing and workflow checks still apply. A run still checkpointing finishes stopping before its retry starts.
+
+Holds and paused run IDs persist in the settings table as `models.holds` and `models.pausedRuns`. The runner enforces holds at scheduling and launch; `/api/model-holds` exposes GET and validated PUT. The sidebar polls shared hold state every five seconds. Holds match provider and configured model ID exactly; CLI default is a separate selection because its actual model is resolved outside the dashboard. External personal CLI use is unaffected.
