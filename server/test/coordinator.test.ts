@@ -6,6 +6,7 @@ import { createCodexParser, DEFAULT_COORDINATOR_CONFIG, parseClaudeLine, type Co
 import type { App } from "../src/app.ts";
 import {
   decide,
+  selectProvider,
   estimateWindow,
   limitWindowFromError,
   nextWeeklyReset,
@@ -123,6 +124,53 @@ const input = (over: Partial<CoordinatorInput> = {}): CoordinatorInput => ({
 const types = (i: CoordinatorInput) => decide(i).map((a) => `${a.type}:${a.taskId}${a.to ? `>${a.to}` : ""}`);
 const ref = (taskId: string, priority = 5, provider: "claude" | "codex" = "claude") => ({ taskId, title: taskId, provider, priority });
 
+describe("automatic provider ranking", () => {
+  const choose = (claude: ProviderState, codex: ProviderState, effort: "medium" | "high" = "high", loads = new Map<"claude" | "codex", number>()) =>
+    selectProvider(
+      "claude",
+      effort,
+      new Map([
+        ["claude", claude],
+        ["codex", codex],
+      ]),
+      config(),
+      NOW,
+      loads,
+    );
+
+  it("gives large work the most compute even with more assigned runs", () => {
+    const loads = new Map<"claude" | "codex", number>([["codex", 2]]);
+    expect(choose(state("ok", 40), state("ok", 5), "high", loads)).toBe("codex");
+    expect(choose(state("ok", 40), state("ok", 5), "medium", loads)).toBe("claude");
+  });
+
+  it("prefers a substantially earlier reset only with similar capacity", () => {
+    expect(choose(state("ok", 10, 4 * HOUR), state("ok", 15, HOUR))).toBe("codex");
+    expect(choose(state("ok", 10, 4 * HOUR), state("ok", 30, HOUR))).toBe("claude");
+    expect(choose(state("ok", 10, 4 * HOUR), state("ok", 15, 3.5 * HOUR))).toBe("claude");
+    const unknownReset = state("ok", 15);
+    unknownReset.session.resetsAt = null;
+    expect(choose(state("ok", 10), unknownReset)).toBe("claude");
+  });
+
+  it("uses weekly headroom and the limiting window's reset", () => {
+    const codex = state("ok", 0, HOUR);
+    codex.weekly = { ...state("ok", 65, 24 * HOUR).session, window: "weekly" };
+    expect(choose(state("ok", 30), codex)).toBe("claude");
+    codex.weekly.usedPercent = 40;
+    expect(choose(state("ok", 30), codex)).toBe("claude");
+  });
+
+  it("excludes unavailable slots and unsafe or unknown destinations", () => {
+    const providers = new Map<"claude" | "codex", ProviderState>([
+      ["claude", state("ok", 0)],
+      ["codex", state("ok", 30)],
+    ]);
+    expect(selectProvider("claude", "high", providers, config(), NOW, new Map(), (p) => p !== "claude")).toBe("codex");
+    for (const level of ["unknown", "reserve", "exhausted", "conserve"] as const) expect(choose(state("ok", 30), state(level, 0))).toBe("claude");
+  });
+});
+
 describe("decisions", () => {
   it("pauses role work inside the reserve, but not emergencies or forced runs", () => {
     const running = [
@@ -201,6 +249,18 @@ describe("decisions", () => {
     const snapshot = input({ queued, providers, config: config({ fillIdle: true }) });
     expect(types(snapshot)).toEqual(["switch:a>codex"]);
     expect(types({ ...snapshot, queued: [{ ...queued[0]!, provider: "codex" }, queued[1]!] })).toEqual([]);
+  });
+
+  it("routes automatic queues without fill-idle and preserves a large task's free-slot assignment", () => {
+    const q = { ...ref("q"), automatic: true, effort: "high" as const, runId: "r1", emergency: false, forced: false, work: true };
+    const providers = new Map<"claude" | "codex", ProviderState>([
+      ["claude", { ...state("ok", 30), maxConcurrent: 1 }],
+      ["codex", { ...state("ok", 0), maxConcurrent: 1 }],
+    ]);
+    const snapshot = input({ queued: [q], providers, config: config({ mode: "auto", fillIdle: false }) });
+    expect(types(snapshot)).toEqual(["switch:q>codex"]);
+    providers.set("codex", { ...state("ok", 0), maxConcurrent: 1, running: 1 });
+    expect(types(snapshot)).toEqual([]);
   });
 
   it("can start an automatic backlog task on another provider only once", () => {

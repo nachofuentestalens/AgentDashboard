@@ -274,6 +274,25 @@ describe("task stages", () => {
     expect(app.store.getTask(first.id)!.status).toBe("running");
   });
 
+  it("uses both providers when the default slot fills without coordinator fill-idle", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "POST", `/api/roles/${qa.id}/agents`, {});
+    for (const provider of ["claude", "codex"]) {
+      await api(app, "POST", "/api/coordinator/readings", {
+        provider,
+        window: "session",
+        usedPercent: 10,
+        resetsAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+      });
+    }
+    const first = await newTask(app, projectId, { roleId: qa.id, title: "First [slow]", canEdit: false, priority: 9 });
+    const second = await newTask(app, projectId, { roleId: qa.id, title: "Second [slow]", canEdit: false, effort: "high" });
+    await api(app, "PATCH", `/api/projects/${projectId}`, { startNextWhenIdle: true });
+    await waitFor(() => app.store.getTask(first.id)!.status === "running" && app.store.getTask(second.id)!.status === "running");
+    expect(app.store.listRuns(first.id)[0]!.provider).toBe("claude");
+    expect(app.store.listRuns(second.id)[0]).toMatchObject({ provider: "codex", effort: "high" });
+  });
+
   it("resumes a step its agent left partial when the project opts in, within the continuation limit", async () => {
     const { app, projectId, qa } = await roleProject();
     await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 1 });
