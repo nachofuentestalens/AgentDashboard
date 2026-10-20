@@ -10,9 +10,17 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+  actions: read
+
+# The slowest job may take at most this long. Raising it needs a justification in the pull request (docs/CI.md).
+env:
+  CI_BUDGET_SECONDS: 300
+
 jobs:
-  # Formatting and types do not depend on the OS, so they run once.
-  checks:
+  # Formatting, types and the Linux unit run are quick, so one job avoids paying setup three times.
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,20 +32,41 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm typecheck
+      - run: pnpm test
 
-  # Unit and e2e suites run as parallel jobs: the wall time is the slowest suite, not their sum.
-  test:
-    name: ${{ matrix.suite }} (${{ matrix.os }})
+  # The browser suite checks the UI, which does not depend on the server's OS; Windows server behaviour is covered by the unit parts.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Runner images ship Google Chrome, so skip downloading Playwright's Chromium and its system packages.
+      - run: pnpm test:e2e
+        env:
+          PW_CHROMIUM: /usr/bin/google-chrome
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e
+          path: test-results/
+          if-no-files-found: ignore
+
+  # Process-heavy API suites run several times slower on Windows, so they are split into parallel parts (scripts/test-part.mjs).
+  windows:
+    name: windows (part ${{ matrix.part }})
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
-        suite: [unit, e2e]
-    runs-on: ${{ matrix.os }}
+        part: [1, 2, 3]
     steps:
       # Real-time scanning of node_modules and spawned agent processes is the main slowdown on Windows runners.
-      - if: runner.os == 'Windows'
-        shell: pwsh
+      - shell: pwsh
         run: Set-MpPreference -DisableRealtimeMonitoring $true
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -46,16 +75,15 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - if: matrix.suite == 'unit'
-        run: pnpm test
-      # Runner images ship Google Chrome, so skip downloading Playwright's Chromium and its system packages.
-      - if: matrix.suite == 'e2e'
-        run: pnpm test:e2e
-        env:
-          PW_CHROMIUM: ${{ runner.os == 'Windows' && 'C:\Program Files\Google\Chrome\Application\chrome.exe' || '/usr/bin/google-chrome' }}
-      - uses: actions/upload-artifact@v4
-        if: always() && matrix.suite == 'e2e'
+      - run: node scripts/test-part.mjs ${{ matrix.part }}
+
+  budget:
+    needs: [linux, e2e, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: e2e-${{ matrix.os }}
-          path: test-results/
-          if-no-files-found: ignore
+          sparse-checkout: scripts
+      - run: node scripts/ci-budget.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
