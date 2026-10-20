@@ -98,6 +98,9 @@ export interface Project {
   startNextWhenIdle: boolean;
   // A passed agent review approves the task and integrates it into the baseline without the owner.
   autoApprove: boolean;
+  // The owner paused the project's agent work: no role task run starts and no automation acts
+  // (plain chats and "run anyway" still do). Running agents finish their current turn.
+  automationPaused: boolean;
   createdAt: string;
   updatedAt: string;
 }

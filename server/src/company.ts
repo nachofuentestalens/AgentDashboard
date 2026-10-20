@@ -101,7 +101,7 @@ export class Company {
     const day = now.toISOString().slice(0, 10);
     for (const project of this.store.listProjects()) {
       const config = this.store.companyConfig(project.id);
-      if (!config?.enabled || this.runner.isProjectBusy(project.id)) continue;
+      if (!config?.enabled || project.automationPaused || this.runner.isProjectBusy(project.id)) continue;
       try {
         if (now.getUTCHours() >= config.dailyHourUtc) {
           for (const kind of ["qa", "director"] as const) {

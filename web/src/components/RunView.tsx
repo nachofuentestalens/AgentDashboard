@@ -65,7 +65,12 @@ export function RunView({ run, isLatest }: { run: Run; isLatest: boolean }) {
         <p className="text-xs text-ink-400">{run.waitReason ?? "Waiting for the scheduler…"}</p>
         <div className="flex gap-2">
           {!run.forced && (
-            <Button variant="ghost" className="!px-2 !py-0.5 text-xs" onClick={() => force.mutate()} title="Ignore budgets and an open emergency for this run">
+            <Button
+              variant="ghost"
+              className="!px-2 !py-0.5 text-xs"
+              onClick={() => force.mutate()}
+              title="Ignore budgets, an open emergency and a paused project for this run"
+            >
               Run anyway
             </Button>
           )}

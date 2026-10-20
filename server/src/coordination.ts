@@ -193,7 +193,8 @@ export class Coordinator implements RunCoordinator {
     const queued: CoordinatorInput["queued"] = [];
     for (const run of this.store.runsWithStatus("queued")) {
       const t = ref(run.taskId);
-      if (!t) continue;
+      // Work the owner paused waits for them, not for a provider.
+      if (!t || (!run.forced && this.store.getProject(t.task.projectId)?.automationPaused)) continue;
       queued.push({
         ...t.ref,
         provider: this.runner.runProvider(run),
@@ -217,7 +218,8 @@ export class Coordinator implements RunCoordinator {
         continue;
       }
       const idle = !this.runner.isTaskRunning(taskId) && t.task.status !== "queued";
-      paused.push({ ...t.ref, runId, resumable: idle && latest.status === "stopped" });
+      const projectPaused = !!this.store.getProject(t.task.projectId)?.automationPaused;
+      paused.push({ ...t.ref, runId, resumable: idle && latest.status === "stopped" && !projectPaused });
     }
     if (pruned) this.store.setStateJson(PAUSED_KEY, pausedState);
     const staffed = new Set(
@@ -228,6 +230,7 @@ export class Coordinator implements RunCoordinator {
     );
     const backlog = this.store
       .listProjects()
+      .filter((p) => !p.automationPaused)
       .flatMap((p) => this.store.backlogTasks(p.id))
       .filter(
         (t) =>

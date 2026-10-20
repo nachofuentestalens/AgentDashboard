@@ -582,7 +582,8 @@ export class Runner {
   private async deliverReviewed(): Promise<void> {
     this.deliveryPending.clear();
     for (const project of this.store.listProjects()) {
-      if (!project.autoApprove || !this.deliver || this.isProjectBusy(project.id) || this.store.deliveryPaused(project.id)) continue;
+      if (!project.autoApprove || project.automationPaused || !this.deliver || this.isProjectBusy(project.id) || this.store.deliveryPaused(project.id))
+        continue;
       const tasks = this.store.listTasks(project.id);
       const key = (task: Task) => `${task.id}:${this.store.getWorkspace(task.id)?.checkpointCommit ?? ""}`;
       const ready = tasks.filter(
@@ -654,7 +655,7 @@ export class Runner {
   // work) no other writer in its department. Every pass re-reads the limits, so raising one starts
   // more work.
   private startIdleBacklog(): void {
-    const projects = this.store.listProjects().filter((p) => p.startNextWhenIdle);
+    const projects = this.store.listProjects().filter((p) => p.startNextWhenIdle && !p.automationPaused);
     if (projects.length === 0) return;
     const limits = this.store.getSettings().maxConcurrentRuns;
     const roleLoad = new Map<string, number>();
@@ -867,7 +868,7 @@ export class Runner {
     if (this.restartHeld) return false;
     const task = this.store.getTask(taskId);
     const project = task ? this.store.getProject(task.projectId) : null;
-    if (!task || !project || task.status !== "idle") return false;
+    if (!task || !project || project.automationPaused || task.status !== "idle") return false;
     try {
       if (ended.purpose === "review" && task.stage === "changes_requested") {
         const review = this.store.listTaskReviews(task.id).at(-1);
@@ -945,6 +946,11 @@ export class Runner {
       const task = this.store.getTask(run.taskId);
       const project = task && this.store.getProject(task.projectId);
       if (task && project && run.purpose === "work") {
+        // The scheduler holds it for the pause; its Git checks can wait until the project resumes.
+        if (project.automationPaused && !run.forced) {
+          readiness.set(run.id, null);
+          continue;
+        }
         if (this.isProjectBusy(project.id)) {
           readiness.set(run.id, "Baseline: a delivery operation is running.");
           continue;
@@ -1038,6 +1044,12 @@ export class Runner {
       freeAgents,
       staffedRoles,
       frozenProjects: new Set(this.store.openEmergencies().map((t) => t.projectId)),
+      pausedProjects: new Set(
+        this.store
+          .listProjects()
+          .filter((p) => p.automationPaused)
+          .map((p) => p.id),
+      ),
       active: [...this.active.values()].map((a) => ({ runId: a.runId, departmentId: a.departmentId, canEdit: a.canEdit, provider: a.provider })),
       queued,
       providerHolds: holds,

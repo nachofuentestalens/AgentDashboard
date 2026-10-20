@@ -101,6 +101,14 @@ describe("scheduler", () => {
       start: ["fire", "forced"],
     },
     {
+      name: "a paused project starts only forced runs, not even emergencies; other projects go on",
+      s: state({
+        pausedProjects: new Set(["p"]),
+        queued: [q("normal"), q("forced", { forced: true }), q("fire", { emergency: true }), q("other", { projectId: "p2" })],
+      }),
+      start: ["other", "forced"],
+    },
+    {
       name: "a department over budget waits; others go on",
       s: state({
         departments: new Map([
@@ -140,6 +148,7 @@ describe("scheduler", () => {
     expect(result.start).toEqual([]);
     expect(result.waiting.get("budget")).toMatch(/Engineering reached its daily budget \(\$2\.00 of \$1\.00\)/);
     expect(result.waiting.get("nobody")).toMatch(/No Designer agent/);
+    expect(plan(state({ pausedProjects: new Set(["p"]), queued: [q("held")] })).waiting.get("held")).toMatch(/project is paused/);
   });
 
   it("assigns distinct free agents and charges estimates as it goes", () => {
