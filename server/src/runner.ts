@@ -304,7 +304,7 @@ export class Runner {
         this.store.addTaskReview({ taskId: task.id, runId: null, reviewer, verdict: "changes", findings: [action.text] });
         break;
       case "approve": {
-        const open = this.store.approvalBlockingChildren(task.id);
+        const open = this.store.openChildTasks(task.id);
         if (open.length && !action.force)
           throw new RunnerError(`Delegated work is still open: ${open.map((t) => t.title).join(", ")}. Approve anyway to continue.`, 409);
         this.store.addTaskReview({ taskId: task.id, runId: null, reviewer, verdict: "approved", findings: [] });
@@ -672,7 +672,7 @@ export class Runner {
           this.store.getWorkspace(task.id)?.checkpointCommit ?? "",
           this.store.projectBaseline(project.id)?.commit ?? "",
           this.store.listTaskReviews(task.id).at(-1)?.id ?? "",
-          this.store.approvalBlockingChildren(task.id).map((child) => child.id),
+          this.store.openChildTasks(task.id).map((child) => child.id),
           this.store.dependencyBlocker(task),
         ]);
       const ready = tasks.filter(
@@ -682,7 +682,7 @@ export class Runner {
           t.status === "idle" &&
           !(t.stepState === "done" && t.nextStep) &&
           !this.store.dependencyBlocker(t) &&
-          this.store.approvalBlockingChildren(t.id).length === 0 &&
+          this.store.openChildTasks(t.id).length === 0 &&
           this.deliveryFailed.get(t.id) !== key(t) &&
           this.passedOnCheckpoint(t),
       );
