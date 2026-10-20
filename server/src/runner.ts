@@ -503,6 +503,29 @@ export class Runner {
     }
   }
 
+  private automaticMergeReady(task: Task): boolean {
+    const w = this.store.getWorkspace(task.id);
+    if (!w?.checkpointCommit || w.error || w.publishedCommit !== w.checkpointCommit) return false;
+    if (!["idle", "done"].includes(task.status) || task.question || task.nextStep) return false;
+    const runs = this.store.listRuns(task.id);
+    if (runs.some((r) => r.status === "queued" || r.status === "running")) return false;
+    if (task.roleId && (task.stage === "approved" || task.stage === "closed")) return w.approvedCommit === w.checkpointCommit;
+    if (task.roleId && (task.stage !== "needs_review" || task.stepState !== "complete")) return false;
+    const latest = runs.at(-1);
+    if (latest?.purpose === "review" && (latest.status !== "succeeded" || !this.passedOnCheckpoint(task))) return false;
+    if (task.roleId && this.store.getProject(task.projectId)?.autoReview && !this.passedOnCheckpoint(task)) return false;
+    const ready = this.store.getStateJson<{ runId: string; checkpoint: string }>(`automatic-merge.${task.id}`);
+    const work = runs.findLast((r) => r.purpose === "work");
+    if (ready) return ready.checkpoint === w.checkpointCommit && ready.runId === work?.id && work.status === "succeeded";
+    // Recover older completed PRs only when their checkpoint was saved during the successful run.
+    if (!work || work.status !== "succeeded" || !work.endedAt || !w.checkpointAt || w.checkpointAt < work.startedAt || w.checkpointAt > work.endedAt)
+      return false;
+    const reply = this.store.listMessages(task.id).findLast((m) => m.runId === work.id && m.role === "assistant")?.text;
+    if (!reply || !commitSummary(reply) || extractHandoff(reply) || parseModelReview(reply)?.action === "switch") return false;
+    if (parseReplyBlocks(reply).some((b) => b.type === "question" || (b.type === "step" && (b.state !== "complete" || !!b.next)))) return false;
+    return !task.roleId || task.stepState === "complete";
+  }
+
   async syncGithubMerges(): Promise<void> {
     if (this.closed || this.restartHeld || this.syncingGithub) return;
     this.syncingGithub = true;
@@ -515,6 +538,17 @@ export class Runner {
         this.workspaceBusy.add(w.taskId);
         try {
           if (await this.github.syncMerge(w.taskId)) this.publishTask(this.store.getTask(w.taskId));
+          else if (!this.closed && !this.restartHeld && this.automaticMergeReady(task)) {
+            const before = this.store.getWorkspace(w.taskId)?.publishError;
+            try {
+              await this.github.merge(w.taskId);
+              if (!this.closed) this.note(w.taskId, "info", "Merged automatically on GitHub after successful checks. The live checkout is unchanged.");
+            } catch (error) {
+              // Retry on the next pass without spending model tokens or repeating the same notice.
+              if (!this.closed && before !== (error as Error).message) this.note(w.taskId, "warn", `Automatic merge waiting: ${(error as Error).message}`);
+            }
+            if (!this.closed) this.publishTask(this.store.getTask(w.taskId));
+          }
         } finally {
           this.workspaceBusy.delete(w.taskId);
         }
@@ -1351,6 +1385,23 @@ export class Runner {
           ...verdict,
         }),
       );
+      if (run.purpose === "work") {
+        const workspace = this.store.getWorkspace(task.id);
+        const complete =
+          canEdit &&
+          status === "succeeded" &&
+          !requestedSwitch &&
+          !hasHandoff &&
+          !waiting &&
+          !checkpointError &&
+          (task.roleId
+            ? step?.state === "complete" && !step.next
+            : !parseReplyBlocks(reply).some((b) => b.type === "step" && (b.state !== "complete" || !!b.next)));
+        this.store.setStateJson(
+          `automatic-merge.${task.id}`,
+          complete && workspace?.checkpointCommit ? { runId: run.id, checkpoint: workspace.checkpointCommit } : null,
+        );
+      }
       // The finished step or the review's verdict now shows in the owner's inbox.
       if (finishedStep || reviewing) this.bus.publish({ type: "inbox_changed" });
       let continued = finishedStep || reviewing ? this.automate(task.id, run, record) : false;
@@ -1430,7 +1481,7 @@ export class Runner {
       if (workspace) {
         record({ kind: "notice", level: "info", text: `Isolated worktree: ${workspace.path} (${workspace.branch}). The project checkout is unchanged.` });
         prompt +=
-          "\n\nMake repository changes only in this task's isolated worktree. Keep its assigned branch. The dashboard saves local WIP commits after runs; do not switch branches, merge into the live checkout, or remove the worktree. Dependencies may need installing in this separate folder. External tools and services may be used when required by the owner's request.";
+          "\n\nMake repository changes only in this task's isolated worktree. Keep its assigned branch. The dashboard saves local WIP commits after runs and automatically squash-merges completed tasks' published PRs once GitHub checks pass. Finish implementation and verification before reporting completion; return a context-handoff for unfinished work. Do not switch branches, merge into the live checkout, or remove the worktree. Dependencies may need installing in this separate folder. External tools and services may be used when required by the owner's request.";
         if (canEdit)
           prompt +=
             '\n\nWhen you change repository files, include a fenced commit-summary JSON block in your final reply: {"title":"Describe what this run changed","taskTitle":"Describe what all changes on this task branch achieved"}. Use concise imperative Git titles (maximum 120 characters each), grounded in the actual diff, not the initial request. Inspect the diff against the task base commit ' +

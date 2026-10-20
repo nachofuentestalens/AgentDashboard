@@ -24,6 +24,20 @@ async function setup() {
 }
 
 describe("isolated task workspaces", () => {
+  it("records merge readiness only for a successfully completed writing run", async () => {
+    const { instance, projectId } = await setup();
+    const task = await newTask(instance, projectId, { message: "[write-workspace] [commit-summary]" });
+    await waitFor(() => !!instance.store.getStateJson(`automatic-merge.${task.id}`));
+    const run = instance.store.listRuns(task.id).at(-1)!;
+    expect(instance.store.getStateJson(`automatic-merge.${task.id}`)).toEqual({
+      runId: run.id,
+      checkpoint: instance.store.getWorkspace(task.id)?.checkpointCommit,
+    });
+    instance.runner.send(task.id, "[fail]");
+    await waitFor(() => instance.store.listRuns(task.id).at(-1)?.status === "failed");
+    expect(instance.store.getStateJson(`automatic-merge.${task.id}`)).toBeNull();
+  });
+
   it("reviews the task changes even when the primary checkout has unrelated edits", async () => {
     const { instance, repo, projectId } = await setup();
     await api(instance, "POST", `/api/projects/${projectId}/studio/template`);

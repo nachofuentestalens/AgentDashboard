@@ -20,7 +20,7 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
   - `folders.ts`: department folders → Claude Code permission rules. `prompts.ts`: the role preamble and the per-turn studio context. `docs.ts`: design documents under `design/` and their commits.
   - `claude.ts`: finds the CLI (PATH, `claude.exe`, npm `.cmd` shims) and builds its arguments.
   - `git.ts`: repository checks and commits. `fake/fake-claude.mjs`: the stand-in agent for tests and demo mode.
-  - `workspaces.ts`: persistent per-task Git worktrees and server-owned checkpoints. `github.ts`: branch publication, draft PRs and checked owner-triggered squash merges; see `docs/WORKSPACES.md` for authentication, baseline requirements, recovery and deployment.
+  - `workspaces.ts`: persistent per-task Git worktrees and server-owned checkpoints. `github.ts`: branch publication, draft PRs and checked automatic squash merges for completed work; see `docs/WORKSPACES.md` for authentication, baseline requirements, recovery and deployment.
   - `workspace-cleanup.ts`: owner-triggered preview/removal, exact-checkpoint Git delivery evidence and recovery references; runner workspace/delivery locks protect removal. Never force-remove worktrees or delete branches.
 - `web/`: React 19 + Vite + Tailwind 4 + TanStack Query + React Router. `live.ts` applies server pushes to the query cache.
 - `e2e/`: Playwright tests against the built app with the fake agent.
