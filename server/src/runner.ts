@@ -128,8 +128,8 @@ export class Runner {
   private readonly deliveryBusy = new Set<string>();
   // Projects with a reviewed task waiting for hands-off delivery: their queued work holds until it lands.
   private readonly deliveryPending = new Set<string>();
-  // taskId:checkpoint pairs whose automatic delivery failed; the owner takes over until the checkpoint changes.
-  private readonly deliveryFailed = new Set<string>();
+  // Suppress repeated delivery failures until the reviewed work or its integration context changes.
+  private readonly deliveryFailed = new Map<string, string>();
   // taskId:checkpoint:baseline → whether the checkpoint is an ancestor of that baseline.
   private readonly integratedCache = new Map<string, boolean>();
   private tickPending = false;
@@ -304,7 +304,7 @@ export class Runner {
         this.store.addTaskReview({ taskId: task.id, runId: null, reviewer, verdict: "changes", findings: [action.text] });
         break;
       case "approve": {
-        const open = this.store.openChildTasks(task.id);
+        const open = this.store.approvalBlockingChildren(task.id);
         if (open.length && !action.force)
           throw new RunnerError(`Delegated work is still open: ${open.map((t) => t.title).join(", ")}. Approve anyway to continue.`, 409);
         this.store.addTaskReview({ taskId: task.id, runId: null, reviewer, verdict: "approved", findings: [] });
@@ -667,28 +667,39 @@ export class Runner {
       if (!project.autoApprove || project.automationPaused || !this.deliver || this.isProjectBusy(project.id) || this.store.deliveryPaused(project.id))
         continue;
       const tasks = this.store.listTasks(project.id);
-      const key = (task: Task) => `${task.id}:${this.store.getWorkspace(task.id)?.checkpointCommit ?? ""}`;
+      const key = (task: Task) =>
+        JSON.stringify([
+          this.store.getWorkspace(task.id)?.checkpointCommit ?? "",
+          this.store.projectBaseline(project.id)?.commit ?? "",
+          this.store.listTaskReviews(task.id).at(-1)?.id ?? "",
+          this.store.approvalBlockingChildren(task.id).map((child) => child.id),
+          this.store.dependencyBlocker(task),
+        ]);
       const ready = tasks.filter(
         (t) =>
           t.roleId &&
           t.stage === "needs_review" &&
           t.status === "idle" &&
           !(t.stepState === "done" && t.nextStep) &&
-          !this.deliveryFailed.has(key(t)) &&
+          !this.store.dependencyBlocker(t) &&
+          this.store.approvalBlockingChildren(t.id).length === 0 &&
+          this.deliveryFailed.get(t.id) !== key(t) &&
           this.passedOnCheckpoint(t),
       );
-      ready.push(...(await this.approvedOutsideBaseline(project.id, tasks)).filter((t) => !this.deliveryFailed.has(key(t))));
+      ready.push(...(await this.approvedOutsideBaseline(project.id, tasks)).filter((t) => this.deliveryFailed.get(t.id) !== key(t)));
       if (ready.length === 0) continue;
       this.deliveryPending.add(project.id);
       if (tasks.some((t) => this.isTaskRunning(t.id))) continue;
       for (const task of ready) {
         if (this.closed || this.restartHeld) return;
+        const attempted = key(task);
         try {
           const warning = await this.deliver(project.id, task.id);
+          this.deliveryFailed.delete(task.id);
           this.note(task.id, "info", "Approved and integrated automatically after the passed agent review (project setting).");
           if (warning) this.note(task.id, "warn", warning);
         } catch (error) {
-          this.deliveryFailed.add(key(task));
+          this.deliveryFailed.set(task.id, attempted);
           this.note(task.id, "warn", `Automatic approval stopped: ${(error as Error).message} Approve or integrate this task yourself.`);
         }
         if (this.closed) return;

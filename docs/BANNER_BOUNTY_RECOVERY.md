@@ -98,3 +98,18 @@ Still open:
 
 - One edit denial in M2-07 (`Edit(./qa/**)` refused for `qa/reports/M2-07.md`) could not be reproduced with CLI 2.1.282.
 - Proposals and owner answers still write to the live checkout; they reach the baseline only once someone pushes that checkout to GitHub.
+
+## Automation deadlock recovery: 2026-10-20, approximately 21:07 UTC
+
+The owner authorized recovery after the audit found M2-22 waiting for its delegated assignment task, that assignment waiting for M2-31, and M2-31 requiring both upstream approvals before starting. Both upstream checkpoints had passed their latest independent review. A separate M2-00 continuation had reopened the superseded plan and conflicted with the M2-20 replacement.
+
+Applied through the live dashboard API, with project automation temporarily paused:
+
+- Stopped M2-00's queued continuation and closed the obsolete task, preserving its checkpoint and branch.
+- Added M2-31 as an explicit prerequisite of M2-24, M2-26, M2-27 and M2-29, preserving their existing prerequisites. Stopped and retried those queued runs around the prerequisite updates.
+- Verified each latest passing review matched its current checkpoint. Approved the assignment task (`dba23a0`) and M2-22 (`6801caa`) with the existing owner override for open children, then integrated each through the managed-baseline API. The resulting baseline was `4f7147eb44565c66735a0771f9b69b440744ba48`.
+- Restored automation. M2-23 was verified running; M2-31 was ready except for the normal single-writer Design department slot. Other successors remained queued behind their real prerequisites.
+
+No game checkout files or local branches were edited. The dashboard fix on this task branch treats children with an explicit dependency path back to their parent as downstream follow-ups, and waits for ordinary delegation blockers without caching a delivery failure. Actual failed deliveries become eligible again when the baseline, checkpoint, review or approval blockers change. These code changes require deployment after validation and normal task delivery.
+
+GitHub PR #25 still had no check runs or commit statuses at inspection. Its check-gated PR merger therefore remained pending; no check result was fabricated or bypassed. The managed baseline already contains the reviewed work and permits milestone execution independently of that PR status.

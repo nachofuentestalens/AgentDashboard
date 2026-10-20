@@ -10,6 +10,10 @@ Role tasks have `dependencyIds` (existing role task IDs in the same project) and
 
 Existing tasks migrate with empty prerequisites. Dependencies written only in prompts or external plans are not inferred. Import them explicitly before enabling automation. See [Banner & Bounty recovery](BANNER_BOUNTY_RECOVERY.md) for the audited project.
 
+Delegation (`parentTaskId`) records where work came from. Open delegated tasks normally block their parent's approval, but a child that explicitly depends on that parent, directly or transitively, is downstream follow-up work: it cannot start until the parent is approved. Such children do not block parent approval. Their prerequisites, reviews and baseline checks remain enforced; other unfinished children still block approval.
+
+Hands-off delivery waits for prerequisite approvals and blocking children before attempting integration, so these temporary waits do not become cached failures or prevent the children from running. A failed integration is suppressed while its checkpoint, baseline, latest review and approval blockers are unchanged; a relevant change makes it eligible for another attempt. Genuine conflicts still require repair.
+
 ## Managed baseline and delivery
 
 The project page's **Delivery & baseline** panel (`delivery.ts`, `delivery-plan.ts`, routes in `delivery-routes.ts`) gives a project a dashboard-owned baseline commit, stored in state and pinned under `refs/agent-dashboard/previews/`. The live checkout's branch, index and files are never changed.

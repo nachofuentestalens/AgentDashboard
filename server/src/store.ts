@@ -934,6 +934,26 @@ export class Store {
     return rows.map(toTask);
   }
 
+  approvalBlockingChildren(taskId: string): Task[] {
+    const task = this.getTask(taskId);
+    if (!task) return [];
+    const tasks = new Map(this.listTasks(task.projectId).map((t) => [t.id, t]));
+    const dependsOnParent = (child: Task): boolean => {
+      const pending = [...child.dependencyIds];
+      const seen = new Set<string>();
+      while (pending.length) {
+        const id = pending.pop()!;
+        if (id === taskId) return true;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        pending.push(...(tasks.get(id)?.dependencyIds ?? []));
+      }
+      return false;
+    };
+    // Downstream follow-ups need this approval to start; waiting for them would deadlock.
+    return this.openChildTasks(taskId).filter((child) => !dependsOnParent(child));
+  }
+
   addTaskReview(input: Omit<TaskReview, "id" | "createdAt">): TaskReview {
     const review: TaskReview = { ...input, commit: input.commit ?? null, id: randomUUID(), createdAt: now() };
     this.db

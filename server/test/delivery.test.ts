@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { App } from "../src/app.ts";
 import type { BaselinePreview, DeliveryPlanPreview, Inbox, ProjectBaseline } from "@ad/shared";
 import { Workspaces } from "../src/workspaces.ts";
@@ -113,6 +113,47 @@ describe("managed project delivery", () => {
     expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:agent-work.txt`)).toBe("Unfinished agent work");
     expect(git(repo, "rev-parse", "HEAD")).toBe(liveHead);
     await waitFor(() => app.store.listRuns(next.id).length > 0, 15_000);
+  });
+
+  it("waits for delegated work without caching an approval failure, then delivers the unchanged parent", async () => {
+    const { projectId, programmer, qa, snapshot } = await setup();
+    await snapshot();
+    const parent = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass]" });
+    await stepFinished(app, parent.id);
+    const child = app.store.createTask({ projectId, roleId: qa, parentTaskId: parent.id, title: "Required work", canEdit: false, model: null, effort: null });
+    await api(app, "POST", `/api/tasks/${parent.id}/actions`, { action: "review" });
+    await stepFinished(app, parent.id);
+    const deliver = vi.fn(app.runner.deliver!);
+    app.runner.deliver = deliver;
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoApprove: true });
+    // Drive complete scheduling passes rather than relying on a sleep to establish non-delivery.
+    await app.runner["deliverReviewed"]();
+    await app.runner["deliverReviewed"]();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(app.store.getTask(parent.id)!.stage).toBe("needs_review");
+    await api(app, "POST", `/api/tasks/${child.id}/actions`, { action: "close" });
+    await waitFor(() => app.store.getTask(parent.id)!.stage === "approved", 15_000);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries failed delivery after the baseline changes, but suppresses unchanged failures", async () => {
+    const { projectId, programmer, repo, snapshot } = await setup();
+    await snapshot();
+    const task = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass]" });
+    await stepFinished(app, task.id);
+    await api(app, "POST", `/api/tasks/${task.id}/actions`, { action: "review" });
+    await stepFinished(app, task.id);
+    const deliver = vi.fn(app.runner.deliver!).mockRejectedValueOnce(new Error("Baseline conflict"));
+    app.runner.deliver = deliver;
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoApprove: true });
+    await waitFor(() => deliver.mock.calls.length === 1);
+    await app.runner["deliverReviewed"]();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "Baseline repair");
+    app.store.setProjectBaseline(projectId, { repoPath: repo, commit: git(repo, "rev-parse", "HEAD"), approvedAt: new Date().toISOString() });
+    app.runner.tick();
+    await waitFor(() => app.store.getTask(task.id)!.stage === "approved", 15_000);
+    expect(deliver).toHaveBeenCalledTimes(2);
   });
 
   it("shows a baseline-blocked successor in the inbox and integrates its plainly approved prerequisite under hands-off delivery", async () => {
