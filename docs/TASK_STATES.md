@@ -238,6 +238,9 @@ count includes them.
   owner's Preview integration → Approve would, once no agent runs in the project (queued work there holds until it lands). A
   `changes` verdict sends the findings back to the author automatically, at most 3 times in a row. A failed integration (conflict,
   oversized diff, blocker) leaves the task in `needs_review` with a notice for the owner.
+  After each integration the baseline is published to GitHub (see [WORKSPACES.md](WORKSPACES.md#github-publication-and-merge)). Agents
+  of a hands-off project are told in their preamble to settle routine scope, evidence and acceptance questions themselves and to ask
+  other departments with task blocks rather than owner-reviewed proposals.
 
 Implemented as project settings `autoReview`, `autoContinueSteps` (0 to 20, 0 is off), `startNextWhenIdle` and `autoApprove`. The
 count of automatic continues and fixes lives on the task (`autoContinues`) and resets whenever the owner sends a message or moves the

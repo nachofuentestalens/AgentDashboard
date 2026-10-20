@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Runner } from "../src/runner.ts";
 import type { App } from "../src/app.ts";
-import { Github, githubRepository } from "../src/github.ts";
+import { Github, githubRepository, publishBaseline } from "../src/github.ts";
 import { git as realGit } from "../src/git.ts";
 import { Workspaces } from "../src/workspaces.ts";
 import { api, git, gitRepo, newProject, newTask, tempDir, testApp } from "./helpers.ts";
@@ -416,5 +416,61 @@ describe("GitHub checkpoint publication", () => {
     await f.instance.runner.syncGithubMerges();
     expect(f.calls.slice(-2).map((c) => c.endpoint)).toEqual(["/repos/owner/game/pulls/12", "/repos/owner/game/pulls/12"]);
     expect(f.instance.runner.isTaskRunning(other.id)).toBe(false);
+  });
+});
+
+describe("GitHub baseline publication", () => {
+  const commit = (repo: string, file: string, text: string, message: string) => {
+    fs.writeFileSync(path.join(repo, file), text);
+    git(repo, "add", file);
+    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", message);
+    return git(repo, "rev-parse", "HEAD");
+  };
+  // A local bare repository stands in for GitHub; only the origin URL check sees a github.com address.
+  function remotes() {
+    const remote = tempDir("ad-github-remote-");
+    git(remote, "init", "-q", "--bare", "-b", "main");
+    const repo = gitRepo();
+    git(repo, "remote", "add", "origin", remote);
+    const start = commit(repo, "README.md", "start\n", "start");
+    git(repo, "push", "-q", "origin", "main");
+    const runGit: typeof realGit = (cwd, args, stdin, env) =>
+      args[0] === "remote" ? Promise.resolve({ ok: true, stdout: "https://github.com/owner/game.git", stderr: "" }) : realGit(cwd, args, stdin, env);
+    const other = tempDir("ad-github-clone-");
+    git(other, "clone", "-q", remote, ".");
+    return { remote, repo, start, runGit, other };
+  }
+
+  it("fast-forwards the default branch to the baseline without touching the live branch", async () => {
+    const { remote, repo, start, runGit } = remotes();
+    git(repo, "checkout", "-q", "-b", "baseline");
+    const baseline = commit(repo, "a.txt", "task output\n", "task");
+    git(repo, "checkout", "-q", "main");
+    expect(await publishBaseline(repo, baseline, runGit)).toBe(baseline);
+    expect(git(remote, "rev-parse", "main")).toBe(baseline);
+    expect(git(repo, "rev-parse", "main")).toBe(start);
+  });
+
+  it("merges commits made on GitHub into the baseline and refuses conflicts", async () => {
+    const { remote, repo, runGit, other } = remotes();
+    const owner = commit(other, "decisions.md", "owner decision\n", "decision");
+    git(other, "push", "-q", "origin", "main");
+    const baseline = commit(repo, "a.txt", "task output\n", "task");
+    const merged = (await publishBaseline(repo, baseline, runGit))!;
+    expect(git(repo, "rev-list", "--parents", "-n", "1", merged).split(" ").slice(1)).toEqual([baseline, owner]);
+    expect(git(remote, "rev-parse", "main")).toBe(merged);
+
+    git(other, "pull", "-q", "--ff-only");
+    commit(other, "a.txt", "edited on GitHub\n", "edit");
+    git(other, "push", "-q", "origin", "main");
+    const before = git(remote, "rev-parse", "main");
+    const conflicting = commit(repo, "a.txt", "edited by a task\n", "task edit");
+    await expect(publishBaseline(repo, conflicting, runGit)).rejects.toThrow("conflict");
+    expect(git(remote, "rev-parse", "main")).toBe(before);
+  });
+
+  it("skips projects without a GitHub origin", async () => {
+    const repo = gitRepo();
+    expect(await publishBaseline(repo, "0".repeat(40))).toBeNull();
   });
 });

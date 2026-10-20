@@ -137,7 +137,8 @@ export class Runner {
   private readonly recheck: NodeJS.Timeout;
   replies: ReplyHandler | null = null;
   coordinator: RunCoordinator | null = null;
-  deliver: ((projectId: string, taskId: string) => Promise<void>) | null = null;
+  // Resolves to a warning when the work landed but a follow-up such as GitHub publication did not.
+  deliver: ((projectId: string, taskId: string) => Promise<string | null>) | null = null;
 
   constructor(
     private readonly store: Store,
@@ -635,8 +636,9 @@ export class Runner {
       for (const task of ready) {
         if (this.closed || this.restartHeld) return;
         try {
-          await this.deliver(project.id, task.id);
+          const warning = await this.deliver(project.id, task.id);
           this.note(task.id, "info", "Approved and integrated automatically after the passed agent review (project setting).");
+          if (warning) this.note(task.id, "warn", warning);
         } catch (error) {
           this.deliveryFailed.add(key(task));
           this.note(task.id, "warn", `Automatic approval stopped: ${(error as Error).message} Approve or integrate this task yourself.`);
@@ -1105,7 +1107,14 @@ export class Runner {
     const department = departments.find((d) => d.id === role.departmentId);
     if (!department) return null;
     const agentName = (agentId && this.store.agentName(agentId)) || role.name;
-    const systemText = roleSystemPrompt({ projectName: project.name, department, departments, role: readOnly ? { ...role, canEdit: false } : role, agentName });
+    const systemText = roleSystemPrompt({
+      projectName: project.name,
+      handsOff: project.autoApprove,
+      department,
+      departments,
+      role: readOnly ? { ...role, canEdit: false } : role,
+      agentName,
+    });
     let file: string | null = null;
     if (provider === "claude") {
       file = path.join(this.promptsDir, `${runId}.md`);

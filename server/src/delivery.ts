@@ -6,6 +6,7 @@ import { requiredPaths } from "@ad/shared";
 import { checkedGit, gitIdentity, mergeCommit } from "./baseline.ts";
 import { git } from "./git.ts";
 import { checkpointTitle } from "./commit-summary.ts";
+import { publishBaseline } from "./github.ts";
 import { HttpError } from "./http.ts";
 import type { Store } from "./store.ts";
 import type { Runner } from "./runner.ts";
@@ -148,13 +149,29 @@ export class Delivery {
 
   // Hands-off delivery: the integration preview and its approval the owner would otherwise do by hand.
   // Without a managed baseline or a task worktree there is nothing to integrate, so it only approves.
-  async autoApprove(projectId: string, taskId: string): Promise<void> {
+  // Returns a publication warning: the task is already approved and integrated by then.
+  async autoApprove(projectId: string, taskId: string): Promise<string | null> {
     if (!this.store.projectBaseline(projectId) || !this.store.getWorkspace(taskId)) {
       this.runner.stageAction(taskId, { action: "approve" });
-      return;
+      return null;
     }
     const preview = await this.integrate(projectId, taskId);
     await this.approve(projectId, preview.id);
+    return this.publish(projectId);
+  }
+
+  async publish(projectId: string): Promise<string | null> {
+    try {
+      await this.runner.deliveryOperation(projectId, async () => {
+        const baseline = this.store.projectBaseline(projectId);
+        if (!baseline) return;
+        const commit = await publishBaseline(baseline.repoPath, baseline.commit);
+        if (commit && commit !== baseline.commit) this.store.setProjectBaseline(projectId, { ...baseline, commit, approvedAt: new Date().toISOString() });
+      });
+      return null;
+    } catch (error) {
+      return `GitHub publication: ${(error as Error).message}`;
+    }
   }
 
   approve(projectId: string, previewId: string) {

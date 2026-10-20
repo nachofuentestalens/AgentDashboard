@@ -1,5 +1,6 @@
 import type { TaskWorkspace } from "@ad/shared";
 import { COMMIT_ID, git } from "./git.ts";
+import { mergeCommit } from "./baseline.ts";
 import { checkpointTitle } from "./commit-summary.ts";
 import type { Store } from "./store.ts";
 import type { Workspaces } from "./workspaces.ts";
@@ -20,6 +21,36 @@ type Pull = {
 export function githubRepository(remote: string): string | null {
   const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(remote);
   return match?.[1] ?? null;
+}
+
+const GITHUB_DEFAULT_REF = "refs/agent-dashboard/github/default";
+
+// Hands-off delivery keeps the GitHub default branch on the approved baseline. Task PR heads then
+// become reachable from it, so GitHub marks those PRs merged. Commits made on GitHub first (an owner
+// merge, a decision record) are merged into the baseline; a conflict stops without changing either.
+// Returns the commit both now share, or null without a single github.com origin.
+export async function publishBaseline(repo: string, baseline: string, runGit = git): Promise<string | null> {
+  const remote = await runGit(repo, ["remote", "get-url", "--push", "--all", "origin"]);
+  const urls = remote.ok ? remote.stdout.split(/\r?\n/) : [];
+  if (urls.length !== 1 || !githubRepository(urls[0]!)) return null;
+  const head = await runGit(repo, ["ls-remote", "--symref", "origin", "HEAD"]);
+  const branch = /^ref: refs\/heads\/([A-Za-z0-9._/-]+)\tHEAD$/m.exec(head.stdout)?.[1];
+  if (!head.ok || !branch) throw new Error("Cannot read the GitHub default branch. Check Git authentication and connectivity.");
+  // A private ref, so the owner's local branches and FETCH_HEAD stay as they are.
+  const fetched = await runGit(repo, ["fetch", "--no-tags", "--quiet", "origin", `+refs/heads/${branch}:${GITHUB_DEFAULT_REF}`]);
+  const current = fetched.ok ? await runGit(repo, ["rev-parse", "--verify", `${GITHUB_DEFAULT_REF}^{commit}`]) : fetched;
+  if (!current.ok) throw new Error(`Cannot fetch GitHub ${branch}. Check Git authentication and connectivity.`);
+  let merged: string;
+  try {
+    merged = await mergeCommit(repo, baseline, current.stdout, `Merge GitHub ${branch} into the managed baseline\n`);
+  } catch {
+    throw new Error(`GitHub ${branch} has changes that conflict with the baseline. Merge them on GitHub or in a task; nothing was pushed.`);
+  }
+  if (merged !== current.stdout) {
+    const pushed = await runGit(repo, ["push", "--quiet", "origin", `${merged}:refs/heads/${branch}`]);
+    if (!pushed.ok) throw new Error(`Pushing the baseline to GitHub ${branch} failed (no force push). Check authentication and branch protection.`);
+  }
+  return merged;
 }
 
 // Tokens remain in memory, never in SQLite, command arguments, responses or logs.
