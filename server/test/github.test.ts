@@ -16,12 +16,14 @@ afterEach(async () => {
   app = null;
 });
 
-async function fixture() {
+async function fixture(withRole = false) {
   const instance = await testApp();
   app = instance;
   const repo = gitRepo();
   const projectId = await newProject(instance, repo);
-  const task = await newTask(instance, projectId);
+  if (withRole) await api(instance, "POST", `/api/projects/${projectId}/studio/template`);
+  const roleId = withRole ? instance.store.findRoleByName(projectId, "Gameplay Programmer")!.id : null;
+  const task = await newTask(instance, projectId, { roleId });
   const workspaces = new Workspaces(instance.store, tempDir("ad-github-workspaces-"));
   const w = await workspaces.ensure(task.id, repo);
   fs.writeFileSync(path.join(w.path, "work.txt"), "Unfinished work");
@@ -244,6 +246,124 @@ describe("GitHub checkpoint publication", () => {
     respond({ merged: true, merge_commit_sha: "abc1234" });
     expect(await stopped).toBe(false);
     expect(f.instance.store.getWorkspace(f.task.id)).toEqual(current);
+  });
+
+  it("automatically retries CI then merges a completed chat without another model run", async () => {
+    const f = await fixture();
+    await f.github.publish(f.task.id);
+    const message = f.instance.store.addMessage({ taskId: f.task.id, role: "user", text: "Finish", runId: null });
+    const run = f.instance.store.createRun({
+      taskId: f.task.id,
+      messageId: message.id,
+      provider: "claude",
+      model: "",
+      effort: "low",
+      sessionId: null,
+      status: "running",
+    });
+    f.instance.store.finishRun(run.id, { status: "succeeded" });
+    f.instance.store.setStateJson(`automatic-merge.${f.task.id}`, { runId: run.id, checkpoint: f.saved.checkpointCommit });
+    const sync = f.github.syncMerge.bind(f.github);
+    const merge = f.github.merge.bind(f.github);
+    vi.spyOn(Github.prototype, "syncMerge").mockImplementation(sync);
+    vi.spyOn(Github.prototype, "merge").mockImplementation(merge);
+    f.state.check = "failure";
+    await f.instance.runner.syncGithubMerges();
+    expect(f.instance.store.getWorkspace(f.task.id)?.mergeCommit).toBeNull();
+    expect(f.instance.store.getWorkspace(f.task.id)?.publishError).toContain("successful GitHub checks");
+    f.state.check = "success";
+    await f.instance.runner.syncGithubMerges();
+    expect(f.instance.store.getWorkspace(f.task.id)?.mergeCommit).toBe("abc1234");
+    expect(f.instance.store.listRuns(f.task.id)).toHaveLength(1);
+    expect(git(f.repo, "status", "--porcelain")).toBe("");
+  });
+
+  it("does not automatically merge unfinished, stale, queued or failed work", async () => {
+    const f = await fixture();
+    await f.github.publish(f.task.id);
+    vi.spyOn(Github.prototype, "syncMerge").mockResolvedValue(false);
+    const merge = vi.spyOn(Github.prototype, "merge");
+    await f.instance.runner.syncGithubMerges();
+    const message = f.instance.store.addMessage({ taskId: f.task.id, role: "user", text: "Finish", runId: null });
+    const run = f.instance.store.createRun({
+      taskId: f.task.id,
+      messageId: message.id,
+      provider: "claude",
+      model: "",
+      effort: "low",
+      sessionId: null,
+      status: "queued",
+    });
+    f.instance.store.setStateJson(`automatic-merge.${f.task.id}`, { runId: run.id, checkpoint: f.saved.checkpointCommit });
+    await f.instance.runner.syncGithubMerges();
+    f.instance.store.finishRun(run.id, { status: "failed" });
+    await f.instance.runner.syncGithubMerges();
+    f.instance.store.finishRun(run.id, { status: "succeeded" });
+    f.instance.store.updateTask(f.task.id, { nextStep: "More work" });
+    await f.instance.runner.syncGithubMerges();
+    f.instance.store.updateTask(f.task.id, { nextStep: null });
+    f.instance.store.setStateJson(`automatic-merge.${f.task.id}`, { runId: run.id, checkpoint: "stale" });
+    await f.instance.runner.syncGithubMerges();
+    expect(merge).not.toHaveBeenCalled();
+  });
+
+  it("merges completed role work only after its configured review passes on the checkpoint", async () => {
+    const f = await fixture(true);
+    await f.github.publish(f.task.id);
+    const role = f.instance.store.findRoleByName(f.task.projectId, "Gameplay Programmer")!;
+    f.instance.store.updateProject(f.task.projectId, { autoReview: true });
+    f.instance.store.updateTask(f.task.id, { stage: "needs_review", stepState: "complete" });
+    const message = f.instance.store.addMessage({ taskId: f.task.id, role: "user", text: "Finish", runId: null });
+    const run = f.instance.store.createRun({
+      taskId: f.task.id,
+      messageId: message.id,
+      provider: "claude",
+      model: "",
+      effort: "low",
+      sessionId: null,
+      status: "running",
+    });
+    f.instance.store.finishRun(run.id, { status: "succeeded" });
+    f.instance.store.setStateJson(`automatic-merge.${f.task.id}`, { runId: run.id, checkpoint: f.saved.checkpointCommit });
+    vi.spyOn(Github.prototype, "syncMerge").mockResolvedValue(false);
+    const merge = vi.spyOn(Github.prototype, "merge").mockResolvedValue(f.saved);
+    await f.instance.runner.syncGithubMerges();
+    expect(merge).not.toHaveBeenCalled();
+    f.instance.store.addTaskReview({ taskId: f.task.id, runId: run.id, reviewer: role.id, verdict: "pass", findings: [], commit: "old" });
+    await f.instance.runner.syncGithubMerges();
+    expect(merge).not.toHaveBeenCalled();
+    f.instance.store.addTaskReview({ taskId: f.task.id, runId: run.id, reviewer: role.id, verdict: "pass", findings: [], commit: f.saved.checkpointCommit });
+    await f.instance.runner.syncGithubMerges();
+    expect(merge).toHaveBeenCalledOnce();
+  });
+
+  it("recovers a legacy completed PR only when the successful run contains its checkpoint", async () => {
+    const f = await fixture();
+    await f.github.publish(f.task.id);
+    const message = f.instance.store.addMessage({ taskId: f.task.id, role: "user", text: "Finish", runId: null });
+    const run = f.instance.store.createRun({
+      taskId: f.task.id,
+      messageId: message.id,
+      provider: "claude",
+      model: "",
+      effort: "low",
+      sessionId: null,
+      status: "running",
+    });
+    f.instance.store.finishRun(run.id, { status: "succeeded" });
+    f.instance.store.addMessage({
+      taskId: f.task.id,
+      role: "assistant",
+      runId: run.id,
+      text: '```commit-summary\n{"title":"Finish work","taskTitle":"Finish work"}\n```',
+    });
+    vi.spyOn(Github.prototype, "syncMerge").mockResolvedValue(false);
+    const merge = vi.spyOn(Github.prototype, "merge").mockResolvedValue(f.saved);
+    await f.instance.runner.syncGithubMerges();
+    expect(merge).not.toHaveBeenCalled();
+    f.instance.store.saveWorkspace({ ...f.instance.store.getWorkspace(f.task.id)!, checkpointAt: run.startedAt });
+    await f.instance.runner.syncGithubMerges();
+    expect(merge).toHaveBeenCalledOnce();
   });
 
   it("polls on the runner timer and emits a task refresh once, then stops on close", async () => {

@@ -115,3 +115,5 @@ Demo checklist (real Claude Code, on Windows):
 - [x] Pause running role work inside the reserve, resume it after the reset, start backlog work before unused session usage resets, move held work to the other provider
 - [x] Route automatic project work by available provider headroom and load without waiting for reset; use review-first complexity routing for model selection
 - [ ] Read Claude's and ChatGPT's usage pages directly when their CLIs expose them, instead of owner readings
+
+- [x] Complete chat and role-task PRs with checked automatic squash merges using the existing poll, without monitoring-agent tokens; [details](WORKSPACES.md)

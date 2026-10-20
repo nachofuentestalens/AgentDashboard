@@ -256,6 +256,7 @@ export class Github {
       ) {
         throw new Error("Merge blocked: the current checkpoint needs successful GitHub checks. Pending, missing or failed checks cannot be bypassed here.");
       }
+      if (!this.available()) throw new Error("Dashboard stopped before merging; retry after restart.");
       if (pull.draft)
         await this.api(w.path, repository, "/graphql", "POST", {
           query: "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
@@ -263,12 +264,14 @@ export class Github {
         });
       const message = await this.runGit(w.path, ["show", "-s", "--format=%B", w.checkpointCommit!]);
       if (!message.ok) throw new Error("Cannot read the checkpoint summary.");
+      if (!this.available()) throw new Error("Dashboard stopped before merging; retry after restart.");
       const merged = await this.api(w.path, repository, `${prefix}/pulls/${number}/merge`, "PUT", {
         sha: w.checkpointCommit,
         merge_method: "squash",
         commit_title: checkpointTitle(message.stdout),
       });
       if (!merged.merged) throw new Error("GitHub did not merge the pull request. Resolve conflicts or branch requirements on GitHub.");
+      if (!this.available()) return w;
       w.mergeCommit = merged.sha;
       this.store.setStateJson(`verified-merge.${taskId}`, { checkpoint: w.checkpointCommit, merge: merged.sha });
       w.publishError = null;
