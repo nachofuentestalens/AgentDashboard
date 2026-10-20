@@ -24,7 +24,7 @@ describe("existing version 5 databases", () => {
         db.exec("PRAGMA user_version = 5");
         migrate(db);
         migrate(db);
-        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 13 });
+        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 14 });
       } finally {
         db.close();
       }
@@ -70,5 +70,24 @@ it("clears existing allowances once without resetting later owner limits or usag
     expect(reopened.runner.usageSummary(task.id)).toEqual(usage);
   } finally {
     await reopened.close();
+  }
+});
+
+it("turns the inbox steward on for projects that already use hands-off delivery", async () => {
+  const dataDir = tempDir("ad-steward-");
+  const app = await testApp(dataDir);
+  const handsOff = await newProject(app);
+  const owner = await newProject(app);
+  app.store.updateProject(handsOff, { autoApprove: true });
+  await app.close();
+  const db = openDb(path.join(dataDir, "dashboard.db"));
+  try {
+    db.exec("PRAGMA user_version = 13");
+    migrate(db);
+    const steward = (id: string) => db.prepare("SELECT inbox_steward FROM projects WHERE id = ?").get(id);
+    expect(steward(handsOff)).toEqual({ inbox_steward: 1 });
+    expect(steward(owner)).toEqual({ inbox_steward: 0 });
+  } finally {
+    db.close();
   }
 });

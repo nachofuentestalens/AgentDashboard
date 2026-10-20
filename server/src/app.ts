@@ -34,6 +34,7 @@ import { Coordinator, registerCoordinatorRoutes } from "./coordination.ts";
 import type { UsageFetcher } from "./usage.ts";
 import { ServerRestart } from "./restart.ts";
 import { Company, registerCompanyRoutes } from "./company.ts";
+import { Steward } from "./steward.ts";
 
 export interface AppOptions {
   restart?: () => void;
@@ -53,6 +54,7 @@ export interface App {
   runner: Runner;
   studio: Studio;
   company: Company;
+  steward: Steward;
   bus: Bus;
   close: () => Promise<void>;
 }
@@ -80,6 +82,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   const runner = new Runner(store, bus, options.dataDir, options.launchers);
   const studio = new Studio(store, bus, runner);
   const company = new Company(store, runner, studio, bus);
+  const steward = new Steward(store, runner, studio, bus);
   const coordinator = new Coordinator(store, bus, runner, Date.now, options.usage ?? null);
   coordinator.startUsagePolling();
   store.markInterrupted();
@@ -179,6 +182,8 @@ export async function buildApp(options: AppOptions): Promise<App> {
     // Turning on "start next when idle" or hands-off delivery may start or approve work right away;
     // pausing or resuming changes what the queue may start.
     if (body.startNextWhenIdle || body.autoApprove || body.automationPaused !== undefined) runner.tick();
+    // The steward takes over (or hands back) the project's waiting items.
+    if (body.inboxSteward !== undefined || body.automationPaused !== undefined) bus.publish({ type: "inbox_changed" });
     return project;
   });
 
@@ -403,6 +408,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
 
   // Runs queued before a restart are still waiting for their turn.
   company.start();
+  steward.start();
   runner.tick();
 
   return {
@@ -411,9 +417,11 @@ export async function buildApp(options: AppOptions): Promise<App> {
     runner,
     studio,
     company,
+    steward,
     bus,
     close: async () => {
       company.close();
+      steward.close();
       restart.close();
       coordinator.stopUsagePolling();
       runner.close();

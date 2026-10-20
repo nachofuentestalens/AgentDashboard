@@ -301,6 +301,28 @@ const MIGRATIONS: (string | ((db: Db) => void))[] = [
     const columns = new Set((db.prepare("PRAGMA table_info(projects)").all() as { name: string }[]).map((c) => c.name));
     if (!columns.has("automation_paused")) db.exec("ALTER TABLE projects ADD COLUMN automation_paused INTEGER NOT NULL DEFAULT 0");
   },
+  // 14: The inbox steward triages a project's inbox before the owner. Hands-off projects already
+  // delegated day-to-day decisions, so they start with it on.
+  (db) => {
+    const columns = new Set((db.prepare("PRAGMA table_info(projects)").all() as { name: string }[]).map((c) => c.name));
+    if (!columns.has("inbox_steward")) db.exec("ALTER TABLE projects ADD COLUMN inbox_steward INTEGER NOT NULL DEFAULT 0");
+    db.exec(`UPDATE projects SET inbox_steward = auto_approve;
+      CREATE TABLE IF NOT EXISTS steward_items (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        item_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        status TEXT NOT NULL CHECK(status IN ('triaging', 'handled', 'escalated')),
+        decision TEXT,
+        action TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        decided_at TEXT,
+        PRIMARY KEY(project_id, item_key)
+      );
+      CREATE INDEX IF NOT EXISTS steward_items_task ON steward_items(task_id);`);
+  },
 ];
 
 export type Db = DatabaseSync;

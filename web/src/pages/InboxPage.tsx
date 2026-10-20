@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { lineDiff, type Handoff, type Inbox, type InboxQuestion, type InboxRun } from "@ad/shared";
+import { inboxKeys, lineDiff, type Handoff, type Inbox, type InboxQuestion, type InboxRun } from "@ad/shared";
 import { api, keys } from "../api.ts";
 import { Markdown } from "../components/Markdown.tsx";
 import { StageActions } from "../components/StageActions.tsx";
@@ -15,6 +15,12 @@ const card = "rounded-xl border border-ink-800 bg-ink-900/60 p-4 space-y-3";
 export function InboxPage() {
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: api.inbox });
   const data = inbox.data;
+  // The steward's reason for handing this item to the owner, when it did.
+  const noted = (key: string, card: ReactNode) => (
+    <Escalated key={key} note={data?.stewardNotes[key]}>
+      {card}
+    </Escalated>
+  );
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl space-y-8 px-8 py-8">
@@ -25,52 +31,34 @@ export function InboxPage() {
         <ErrorNote error={inbox.error} />
         {data && data.count === 0 && <p className="text-sm text-ink-300">Nothing is waiting on you.</p>}
         {data && data.questions.length > 0 && (
-          <Section title="Questions">
-            {data.questions.map((q) => (
-              <QuestionCard key={q.task.id} q={q} />
-            ))}
-          </Section>
+          <Section title="Questions">{data.questions.map((q) => noted(inboxKeys.question(q.task), <QuestionCard q={q} />))}</Section>
         )}
         {data && data.reviews.length > 0 && (
-          <Section title="Ready for review">
-            {data.reviews.map((r) => (
-              <StageCard key={r.task.id} item={r} />
-            ))}
-          </Section>
+          <Section title="Ready for review">{data.reviews.map((r) => noted(inboxKeys.review(r.task), <StageCard item={r} />))}</Section>
         )}
         {data && data.changes.length > 0 && (
-          <Section title="Changes requested">
-            {data.changes.map((r) => (
-              <StageCard key={r.task.id} item={r} />
-            ))}
-          </Section>
+          <Section title="Changes requested">{data.changes.map((r) => noted(inboxKeys.changes(r.task), <StageCard item={r} />))}</Section>
         )}
         {data && data.proposals.length > 0 && (
-          <Section title="Design proposals">
-            {data.proposals.map((p) => (
-              <ProposalCard key={p.id} p={p} />
-            ))}
-          </Section>
+          <Section title="Design proposals">{data.proposals.map((p) => noted(inboxKeys.proposal(p), <ProposalCard p={p} />))}</Section>
         )}
         {data && data.handoffs.length > 0 && (
-          <Section title="Task requests">
-            {data.handoffs.map((h) => (
-              <HandoffCard key={h.id} h={h} />
-            ))}
-          </Section>
+          <Section title="Task requests">{data.handoffs.map((h) => noted(inboxKeys.handoff(h), <HandoffCard h={h} />))}</Section>
         )}
         {data && data.blocked.length > 0 && (
-          <Section title="Blocked on the baseline">
-            {data.blocked.map((h) => (
-              <BlockedCard key={h.run.id} h={h} />
-            ))}
-          </Section>
+          <Section title="Blocked on the baseline">{data.blocked.map((h) => noted(inboxKeys.blocked(h.run), <BlockedCard h={h} />))}</Section>
         )}
         {data && data.held.length > 0 && (
-          <Section title="Held by a budget or an emergency">
-            {data.held.map((h) => (
-              <HeldCard key={h.run.id} h={h} />
-            ))}
+          <Section title="Held by a budget or an emergency">{data.held.map((h) => noted(inboxKeys.held(h.run), <HeldCard h={h} />))}</Section>
+        )}
+        {data && data.steward.triaging.length > 0 && (
+          <Section title="With the inbox steward">
+            <StewardList items={data.steward.triaging} />
+          </Section>
+        )}
+        {data && data.steward.handled.length > 0 && (
+          <Section title="Recently handled by the inbox steward">
+            <StewardList items={data.steward.handled} />
           </Section>
         )}
       </div>
@@ -292,5 +280,37 @@ function HeldCard({ h }: { h: InboxRun }) {
       </div>
       <ErrorNote error={force.error ?? stop.error} />
     </article>
+  );
+}
+
+function Escalated({ note, children }: { note: string | undefined; children: ReactNode }) {
+  if (note === undefined) return <>{children}</>;
+  return (
+    <div className="space-y-2">
+      <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs whitespace-pre-wrap text-amber-200">
+        <span className="font-semibold">Escalated by the inbox steward:</span> {note || "no reason given."}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+function StewardList({ items }: { items: Inbox["steward"]["handled"] }) {
+  return (
+    <ul className={`${card} text-sm`}>
+      {items.map((i) => (
+        <li key={`${i.projectId}/${i.key}`} className="flex flex-wrap items-baseline gap-x-2">
+          <span className="text-ink-400">{i.projectName}</span>
+          <span>{i.title}</span>
+          {i.action && <span className="rounded bg-ink-800 px-1.5 text-xs text-ink-300">{i.action}</span>}
+          {i.note && <span className="text-xs text-ink-400">{i.note}</span>}
+          {i.taskId && (
+            <Link className="text-xs text-sky-300 hover:underline" to={`/tasks/${i.taskId}`}>
+              triage
+            </Link>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }

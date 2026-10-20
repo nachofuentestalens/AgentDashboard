@@ -1,4 +1,5 @@
 import type { Inbox, Run } from "./models.ts";
+import { inboxKeys } from "./steward.ts";
 
 export interface AttentionItem {
   // Stable while the item waits, so the same item is announced once.
@@ -11,28 +12,28 @@ export interface AttentionItem {
 export function attentionItems(inbox: Inbox): AttentionItem[] {
   return [
     ...inbox.questions.map((q) => ({
-      key: `question:${q.task.id}:${q.task.question ?? ""}`,
+      key: inboxKeys.question(q.task),
       text: `Question from "${q.task.title}"`,
       url: `/tasks/${q.task.id}`,
     })),
     ...inbox.reviews.map((r) => ({
-      key: `review:${r.task.id}:${r.task.stageChangedAt ?? ""}`,
+      key: inboxKeys.review(r.task),
       text: `"${r.task.title}" is ready for review`,
       url: `/tasks/${r.task.id}`,
     })),
     ...inbox.changes.map((r) => ({
-      key: `changes:${r.task.id}:${r.task.stageChangedAt ?? ""}`,
+      key: inboxKeys.changes(r.task),
       text: `Changes requested on "${r.task.title}"`,
       url: `/tasks/${r.task.id}`,
     })),
-    ...inbox.proposals.map((p) => ({ key: `proposal:${p.id}`, text: `Design proposal for ${p.docPath}`, url: "/inbox" })),
-    ...inbox.handoffs.map((h) => ({ key: `handoff:${h.id}`, text: `Task request: "${h.title}" for ${h.toRoleName}`, url: "/inbox" })),
+    ...inbox.proposals.map((p) => ({ key: inboxKeys.proposal(p), text: `Design proposal for ${p.docPath}`, url: "/inbox" })),
+    ...inbox.handoffs.map((h) => ({ key: inboxKeys.handoff(h), text: `Task request: "${h.title}" for ${h.toRoleName}`, url: "/inbox" })),
     ...inbox.blocked.map((h) => ({
-      key: `blocked:${h.run.id}:${h.run.waitReason ?? ""}`,
+      key: inboxKeys.blocked(h.run),
       text: `"${h.task.title}" is blocked: ${h.run.waitReason}`,
       url: "/inbox",
     })),
-    ...inbox.held.map((h) => ({ key: `held:${h.run.id}`, text: `"${h.task.title}" is held: ${h.run.waitReason ?? "waiting"}`, url: "/inbox" })),
+    ...inbox.held.map((h) => ({ key: inboxKeys.held(h.run), text: `"${h.task.title}" is held: ${h.run.waitReason ?? "waiting"}`, url: "/inbox" })),
   ];
 }
 

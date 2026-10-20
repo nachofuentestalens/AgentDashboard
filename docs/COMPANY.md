@@ -17,5 +17,5 @@ Remaining phases:
 - Give the director validated, bounded actions for role creation, hiring, retirement, task prioritization, and deduplicated backlog changes.
 - Carry the brief into all company work and implement a recurring planning cycle using current task, design, feedback, and milestone state.
 - Capture structured playtest evidence and reports, route findings into work, and let the director consume QA results.
-- Implement approval routing for money and downtime while resolving ordinary decisions and recovery without owner supervision.
+- Implement approval routing for money and downtime while resolving ordinary decisions and recovery without owner supervision. The [inbox steward](STEWARD.md) now resolves ordinary inbox decisions; money and downtime are escalated by its prompt, not a technical classification.
 - Verify the full brief-to-playable-build loop, including delivery, failed playtests, quota exhaustion, and restart recovery.

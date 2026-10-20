@@ -4,7 +4,7 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
 
 ## Layout
 
-- `shared/`: types (`models.ts`), zod request schemas (`schemas.ts`), the stream-json parser (`parser.ts`), the transcript reducer (`transcript.ts`), the reply-block parser (`blocks.ts`: `task` / `proposal` / `question` / `step` / `plan` / `review`), a line diff (`diff.ts`) and the inbox items that trigger desktop alerts (`attention.ts`, used by `web/src/attention.ts`). Pure code, used by both server and web. Imported as TypeScript source (`@ad/shared`); there is no build step.
+- `shared/`: types (`models.ts`), zod request schemas (`schemas.ts`), the stream-json parser (`parser.ts`), the transcript reducer (`transcript.ts`), the reply-block parser (`blocks.ts`: `task` / `proposal` / `question` / `step` / `plan` / `review` / `decision`), a line diff (`diff.ts`) and the inbox items that trigger desktop alerts (`attention.ts`, used by `web/src/attention.ts`). Pure code, used by both server and web. Imported as TypeScript source (`@ad/shared`); there is no build step.
 - `server/`: Fastify API run with tsx.
   - `app.ts`: core routes, the loopback/origin guard, SSE `/api/events`, static web serving. `studio-routes.ts`: departments, roles, agents, docs, inbox, compute, feedback.
   - `store.ts`: **all SQL**. `db.ts`: `node:sqlite` connection and append-only migrations.
@@ -15,6 +15,7 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
   - `readiness.ts`: committed input and prerequisite ancestry checks before scheduling/launch; dependency graph validation and approval state live in `store.ts`. See `docs/DEPENDENCIES.md` and the Banner & Bounty recovery audit before enabling automation on legacy task plans.
   - `delivery.ts` / `delivery-plan.ts` / `baseline.ts`: the owner-approved managed baseline (snapshot, task integration previews via `merge-tree`, milestone plan import, enabling automation). Never touches the live checkout; see `docs/DEPENDENCIES.md`.
   - `coordinator.ts`: the pure rules of the project coordinator (provider session/weekly usage levels, the owner's reserve, scheduler holds, pause/resume/start/switch decisions); `coordination.ts` is its service and routes. See `docs/COORDINATOR.md`; change rules there and in its table test.
+  - `steward.ts`: the inbox steward, an agent role that triages a project's inbox before the owner through validated `decision` blocks and escalates the rest; see `docs/STEWARD.md`.
   - `studio.ts`: the studio service: template, structure views, acting on reply blocks, inbox decisions, compute view, feedback triage. `template.ts`: the default studio.
   - `company.ts`: opt-in company briefs, initial Director/QA staffing, and durable daily observation assignments. See `docs/COMPANY.md` for scheduling, recovery, and unfinished autonomy phases.
   - `folders.ts`: department folders → Claude Code permission rules. `prompts.ts`: the role preamble and the per-turn studio context. `docs.ts`: design documents under `design/` and their commits.

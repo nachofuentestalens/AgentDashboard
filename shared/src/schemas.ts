@@ -55,6 +55,7 @@ export const updateProjectBody = z.object({
   startNextWhenIdle: z.boolean().optional(),
   autoApprove: z.boolean().optional(),
   automationPaused: z.boolean().optional(),
+  inboxSteward: z.boolean().optional(),
 });
 
 export const dependencyIds = z.array(z.string().trim().min(1).max(64)).max(100);

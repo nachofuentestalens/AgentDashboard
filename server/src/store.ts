@@ -17,6 +17,10 @@ import {
   type CompanyConfig,
   type CompanyAssignment,
   type CompanyAssignmentKind,
+  type StewardAction,
+  type StewardItem,
+  type StewardItemKind,
+  type StewardItemStatus,
   type ProviderLimits,
   type Agent,
   type Autonomy,
@@ -105,6 +109,7 @@ const toProject = (r: Row): Project => ({
   startNextWhenIdle: r.start_next_when_idle === 1,
   autoApprove: r.auto_approve === 1,
   automationPaused: r.automation_paused === 1,
+  inboxSteward: r.inbox_steward === 1,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
 });
@@ -398,6 +403,79 @@ export class Store {
     });
   }
 
+  // ---- inbox steward
+
+  stewardItems(filter: { projectId?: string; status?: StewardItemStatus; taskId?: string; limit?: number } = {}): StewardItem[] {
+    const where: string[] = [];
+    const args: string[] = [];
+    for (const [column, value] of [
+      ["project_id", filter.projectId],
+      ["status", filter.status],
+      ["task_id", filter.taskId],
+    ] as const) {
+      if (value === undefined) continue;
+      where.push(`${column} = ?`);
+      args.push(value);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM steward_items ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY COALESCE(decided_at, created_at) DESC LIMIT ${filter.limit ?? 500}`,
+      )
+      .all(...args) as Row[];
+    return rows.map((r) => ({
+      projectId: r.project_id as string,
+      key: r.item_key as string,
+      kind: r.kind as StewardItemKind,
+      title: r.title as string,
+      taskId: str(r.task_id),
+      status: r.status as StewardItemStatus,
+      action: str(r.action) as StewardAction | null,
+      note: str(r.note),
+      createdAt: r.created_at as string,
+      decidedAt: str(r.decided_at),
+    }));
+  }
+
+  isStewardTask(taskId: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM steward_items WHERE task_id = ? LIMIT 1").get(taskId);
+  }
+
+  stewardKeys(projectId: string): Set<string> {
+    const rows = this.db.prepare("SELECT item_key FROM steward_items WHERE project_id = ?").all(projectId) as Row[];
+    return new Set(rows.map((r) => r.item_key as string));
+  }
+
+  // The triage task and its items commit together, so a crash never leaves items without a task.
+  routeStewardItems(projectId: string, items: { key: string; kind: StewardItemKind; title: string }[], createTask: () => string): string {
+    return transaction(this.db, () => {
+      const taskId = createTask();
+      const insert = this.db.prepare(
+        "INSERT INTO steward_items(project_id, item_key, kind, title, task_id, status, created_at) VALUES (?, ?, ?, ?, ?, 'triaging', ?) ON CONFLICT DO NOTHING",
+      );
+      for (const item of items) insert.run(projectId, item.key, item.kind, item.title, taskId, now());
+      return taskId;
+    });
+  }
+
+  recordStewardDecision(taskId: string, key: string, decision: unknown): boolean {
+    return (
+      this.db
+        .prepare("UPDATE steward_items SET decision = ? WHERE task_id = ? AND item_key = ? AND status = 'triaging'")
+        .run(JSON.stringify(decision), taskId, key).changes > 0
+    );
+  }
+
+  stewardDecision<T>(projectId: string, key: string): T | null {
+    const row = this.db.prepare("SELECT decision FROM steward_items WHERE project_id = ? AND item_key = ?").get(projectId, key) as Row | undefined;
+    return parseJson<T | null>(row?.decision, null);
+  }
+
+  settleStewardItem(projectId: string, key: string, status: Exclude<StewardItemStatus, "triaging">, action: StewardAction | null, note: string): void {
+    this.db
+      .prepare("UPDATE steward_items SET status = ?, action = ?, note = ?, decided_at = ? WHERE project_id = ? AND item_key = ? AND status = 'triaging'")
+      .run(status, action, note.slice(0, 2000), now(), projectId, key);
+  }
+
   projectBaseline(projectId: string): ProjectBaseline | null {
     return this.getStateJson<ProjectBaseline>(`baseline.${projectId}`);
   }
@@ -551,6 +629,7 @@ export class Store {
         | "startNextWhenIdle"
         | "autoApprove"
         | "automationPaused"
+        | "inboxSteward"
       >
     >,
   ): Project | null {
@@ -560,7 +639,7 @@ export class Store {
     this.db
       .prepare(
         `UPDATE projects SET name = ?, repo_path = ?, default_provider = ?, default_model = ?, default_effort = ?, allowed_tools = ?, auto_review = ?,
-           auto_continue_steps = ?, start_next_when_idle = ?, auto_approve = ?, automation_paused = ?, updated_at = ? WHERE id = ?`,
+           auto_continue_steps = ?, start_next_when_idle = ?, auto_approve = ?, automation_paused = ?, inbox_steward = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.name,
@@ -574,6 +653,7 @@ export class Store {
         next.startNextWhenIdle ? 1 : 0,
         next.autoApprove ? 1 : 0,
         next.automationPaused ? 1 : 0,
+        next.inboxSteward ? 1 : 0,
         now(),
         id,
       );

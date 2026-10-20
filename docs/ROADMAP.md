@@ -77,6 +77,7 @@ Demo checklist (real Claude Code, on Windows):
   - [ ] Automatic conflict resolution; lift department concurrency limits after integration (scheduled cleanup remains out of scope)
 - [ ] Templates: Feature, Bugfix, Balance pass, Content batch; save your own
 - [ ] Promote a chat to a workflow
+- [x] Inbox steward: an agent triages each project's inbox first and escalates only what it cannot decide; [details](STEWARD.md)
 - [ ] Review by the reporting line: a role's proposals against another department's documents are reviewed by that department's lead before they reach the owner
 
 ## Phase 4: gamedev tools

@@ -20,6 +20,7 @@ export function ProjectSettings({ project }: { project: Project }) {
   const [autoContinue, setAutoContinue] = useState(project.autoContinueSteps);
   const [startNext, setStartNext] = useState(project.startNextWhenIdle);
   const [autoApprove, setAutoApprove] = useState(project.autoApprove);
+  const [inboxSteward, setInboxSteward] = useState(project.inboxSteward);
 
   const save = useMutation({
     mutationFn: () =>
@@ -37,6 +38,7 @@ export function ProjectSettings({ project }: { project: Project }) {
         autoContinueSteps: autoContinue,
         startNextWhenIdle: startNext,
         autoApprove,
+        inboxSteward,
       }),
     onSuccess: (p) => qc.setQueryData(keys.project(p.id), p),
   });
@@ -132,6 +134,11 @@ export function ProjectSettings({ project }: { project: Project }) {
           checked={autoApprove}
           onChange={setAutoApprove}
           label="Hands-off delivery: approve and integrate a task when its agent review passes, and send review findings back to the author (up to 3 times in a row)"
+        />
+        <Toggle
+          checked={inboxSteward}
+          onChange={setInboxSteward}
+          label="Inbox steward: an agent handles this project's inbox first (answers, proposals, task requests, reviews) and only escalates money, irreversible, legal or open game-direction decisions to you"
         />
       </fieldset>
       <ErrorNote error={save.error} />
