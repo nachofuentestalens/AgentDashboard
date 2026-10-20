@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
+  dismissAlertBody,
   acceptProposalBody,
   addFeedbackBody,
   answerBody,
@@ -189,6 +190,14 @@ export function registerStudioRoutes(app: FastifyInstance, ctx: { store: Store; 
   // ---- inbox
 
   app.get("/api/inbox", async () => studio.inbox());
+
+  app.post<Params>("/api/projects/:id/steward/alerts/dismiss", async (request, reply) => {
+    const body = parse(dismissAlertBody, request.body, reply);
+    if (!body) return;
+    if (!store.clearStewardAlert(request.params.id, body.key, "Dismissed by the owner.")) throw new HttpError("That alert is not waiting.", 404);
+    bus.publish({ type: "inbox_changed" });
+    return reply.code(204).send();
+  });
 
   app.post<Params>("/api/proposals/:id/accept", async (request, reply) => {
     const body = parse(acceptProposalBody, request.body, reply);

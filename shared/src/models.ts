@@ -587,6 +587,9 @@ export interface Inbox {
   held: InboxRun[];
   // Queued runs whose prerequisites are not in their baseline: they wait until the owner integrates them.
   blocked: InboxRun[];
+  // Project health concerns (stalls, repeated failures, stuck tasks) the steward escalated; they
+  // leave the inbox when the condition clears or the owner dismisses them.
+  alerts: (StewardItem & { projectName: string })[];
   // Items the inbox steward is deciding or recently handled; their groups above leave them out.
   steward: { triaging: (StewardItem & { projectName: string })[]; handled: (StewardItem & { projectName: string })[] };
   // The steward's reason for each escalated item still waiting, by inboxKeys key.

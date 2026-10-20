@@ -140,6 +140,7 @@ export const api = {
   saveDoc: (projectId: string, path: string, content: string) => request<Saved>("PUT", `/api/projects/${projectId}/docs/file`, { path, content }),
 
   inbox: () => request<Inbox>("GET", "/api/inbox"),
+  dismissAlert: (projectId: string, key: string) => request<void>("POST", `/api/projects/${projectId}/steward/alerts/dismiss`, { key }),
   acceptProposal: (id: string, body?: string) =>
     request<{ proposal: Proposal } & Saved>("POST", `/api/proposals/${id}/accept`, body === undefined ? {} : { body }),
   rejectProposal: (id: string, reason?: string) => request<Proposal>("POST", `/api/proposals/${id}/reject`, reason ? { reason } : {}),

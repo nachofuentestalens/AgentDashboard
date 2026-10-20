@@ -11,6 +11,7 @@ const inbox = (parts: Partial<Inbox>): Inbox => ({
   changes: [],
   held: [],
   blocked: [],
+  alerts: [],
   count: 0,
   ...parts,
 });

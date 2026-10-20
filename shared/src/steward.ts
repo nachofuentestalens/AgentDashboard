@@ -4,7 +4,9 @@ import type { Handoff, Proposal, Run, Task } from "./models.ts";
 // (docs/STEWARD.md). These keys name one waiting item; they change when the item does, so a new
 // question or a later review is triaged again.
 
-export type StewardItemKind = "question" | "proposal" | "handoff" | "review" | "changes" | "held" | "blocked";
+// stall, failing and stuck are project health concerns the server detects (server/src/health.ts),
+// not inbox items: the steward watches the whole project, not only what waits on the owner.
+export type StewardItemKind = "question" | "proposal" | "handoff" | "review" | "changes" | "held" | "blocked" | "stall" | "failing" | "stuck";
 
 // What the steward may do with each kind of item. Everything else is the owner's.
 export const STEWARD_ACTIONS = {
@@ -15,7 +17,13 @@ export const STEWARD_ACTIONS = {
   changes: ["fix", "escalate"],
   held: ["wait", "escalate"],
   blocked: ["wait", "escalate"],
+  stall: ["wait", "delegate", "report", "escalate"],
+  failing: ["retry", "delegate", "report", "escalate"],
+  stuck: ["continue", "delegate", "report", "escalate"],
 } as const satisfies Record<StewardItemKind, readonly string[]>;
+
+export const HEALTH_KINDS = ["stall", "failing", "stuck"] as const satisfies readonly StewardItemKind[];
+export const isHealthKind = (kind: StewardItemKind) => (HEALTH_KINDS as readonly string[]).includes(kind);
 
 export type StewardAction = (typeof STEWARD_ACTIONS)[StewardItemKind][number];
 

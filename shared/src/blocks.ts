@@ -19,7 +19,7 @@ export type ReplyBlock =
   | { type: "step"; state: "done" | "partial" | "complete"; summary: string; next: string | null }
   | { type: "review"; verdict: "pass" | "changes"; findings: string[] }
   | { type: "plan"; steps: string[] }
-  | { type: "decision"; item: string; action: string; text: string | null; reason: string }
+  | { type: "decision"; item: string; action: string; text: string | null; reason: string; role?: string }
   | { type: "invalid"; lang: string; error: string };
 
 // The action is checked against the item's kind by the server (STEWARD_ACTIONS).
@@ -33,6 +33,8 @@ const decision = z.object({
     .nullish()
     .transform((s) => s || null),
   reason: z.string().trim().min(1).max(2000),
+  // The role a "delegate" decision hands work to.
+  role: z.string().trim().min(1).max(100).optional(),
 });
 
 const plan = z.object({ steps: z.array(z.string().trim().min(1).max(200)).min(1).max(30) });

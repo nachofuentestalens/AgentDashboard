@@ -184,12 +184,16 @@ for (const state of ["done", "complete", "partial"]) {
     blocks.push(fence("step", JSON.stringify({ state, summary: `Fake step ${state}.`, next: state === "complete" ? null : "Tune the dash cooldown." })));
 }
 // The inbox steward's triage: one decision per item, chosen by the item's kind.
-for (const [, item, kind] of prompt.matchAll(/^Item key: ((\w+):\S+)$/gm)) {
+for (const [, item, kind, actions] of prompt.matchAll(/^Item key: ((\w+):\S+)\r?\nKind: \w+; actions: (.*)$/gm)) {
   const decision = {
     question: { action: "answer", text: "Use a shield." },
     proposal: { action: "accept" },
     held: { action: "wait" },
     blocked: { action: "wait" },
+    stall: { action: "wait" },
+    stuck: { action: "continue" },
+    // Retry while the server allows it, then blame the dashboard.
+    failing: actions.includes("retry") ? { action: "retry" } : { action: "report", text: "The run fails before the agent starts." },
   }[kind] ?? { action: "escalate", text: "Approve it." };
   blocks.push(fence("decision", JSON.stringify({ item, ...decision, reason: `Fake steward decided ${kind}.` })));
 }

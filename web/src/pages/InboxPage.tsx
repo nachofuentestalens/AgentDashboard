@@ -30,6 +30,13 @@ export function InboxPage() {
         </div>
         <ErrorNote error={inbox.error} />
         {data && data.count === 0 && <p className="text-sm text-ink-300">Nothing is waiting on you.</p>}
+        {data && data.alerts.length > 0 && (
+          <Section title="Project health">
+            {data.alerts.map((a) => (
+              <AlertCard key={`${a.projectId}/${a.key}`} a={a} />
+            ))}
+          </Section>
+        )}
         {data && data.questions.length > 0 && (
           <Section title="Questions">{data.questions.map((q) => noted(inboxKeys.question(q.task), <QuestionCard q={q} />))}</Section>
         )}
@@ -292,6 +299,31 @@ function Escalated({ note, children }: { note: string | undefined; children: Rea
       </p>
       {children}
     </div>
+  );
+}
+
+// A stall, repeated failure or idle task the steward could not handle; it leaves once the condition clears.
+function AlertCard({ a }: { a: Inbox["alerts"][number] }) {
+  const dismiss = useMutation({ mutationFn: () => api.dismissAlert(a.projectId, a.key) });
+  return (
+    <article className={card} aria-label={`Health alert: ${a.title}`}>
+      <From project={a.projectName} />
+      <p className="text-sm font-medium">{a.title}</p>
+      <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs whitespace-pre-wrap text-amber-200">
+        <span className="font-semibold">Escalated by the inbox steward:</span> {a.note || "no reason given."}
+      </p>
+      <div className="flex items-center gap-3">
+        <Button disabled={dismiss.isPending} onClick={() => dismiss.mutate()}>
+          Dismiss
+        </Button>
+        {a.taskId && (
+          <Link className="text-xs text-sky-300 hover:underline" to={`/tasks/${a.taskId}`}>
+            triage
+          </Link>
+        )}
+      </div>
+      <ErrorNote error={dismiss.error} />
+    </article>
   );
 }
 
