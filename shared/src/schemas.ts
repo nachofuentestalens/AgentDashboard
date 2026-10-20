@@ -53,6 +53,7 @@ export const updateProjectBody = z.object({
   autoContinueSteps: z.number().int().min(0).max(20).optional(),
   startNextWhenIdle: z.boolean().optional(),
   autoApprove: z.boolean().optional(),
+  automationPaused: z.boolean().optional(),
 });
 
 export const dependencyIds = z.array(z.string().trim().min(1).max(64)).max(100);

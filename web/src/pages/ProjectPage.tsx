@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, useNavigate, useParams } from "react-router";
 import { DEFAULT_PRIORITY, resolveChoice, type Provider, type Effort, type Project, type RoleView } from "@ad/shared";
 import { api, keys } from "../api.ts";
@@ -7,7 +7,7 @@ import { Composer } from "../components/Composer.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { TaskBoard } from "../components/TaskBoard.tsx";
 import { DeliveryPanel } from "../components/DeliveryPanel.tsx";
-import { ErrorNote, PrioritySelect, selectClass, Toggle } from "../components/ui.tsx";
+import { Button, ErrorNote, PrioritySelect, selectClass, Toggle } from "../components/ui.tsx";
 import { DocsTab } from "./DocsTab.tsx";
 import { FeedbackTab } from "./FeedbackTab.tsx";
 import { ProjectSettings } from "./ProjectSettings.tsx";
@@ -44,8 +44,13 @@ export function ProjectPage({ tab }: { tab: ProjectTab }) {
   return (
     <div className="flex h-full flex-col">
       <header className="border-b border-ink-800 px-8 pt-6">
-        <h1 className="text-xl font-semibold">{p.name}</h1>
-        <p className="mt-0.5 font-mono text-xs text-ink-400">{p.repoPath}</p>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold">{p.name}</h1>
+            <p className="mt-0.5 font-mono text-xs text-ink-400">{p.repoPath}</p>
+          </div>
+          <PauseProject project={p} />
+        </div>
         <nav className="mt-4 flex gap-5">
           {TABS.map((t) => (
             <NavLink key={t.tab} to={`/projects/${p.id}${t.path}`} end className={tabClass}>
@@ -62,6 +67,34 @@ export function ProjectPage({ tab }: { tab: ProjectTab }) {
         {tab === "feedback" && <FeedbackTab project={p} />}
         {tab === "settings" && <ProjectSettings project={p} />}
       </div>
+    </div>
+  );
+}
+
+// Pausing holds the project's queued role work and its automation so other projects get the slots.
+function PauseProject({ project }: { project: Project }) {
+  const qc = useQueryClient();
+  const toggle = useMutation({
+    mutationFn: () => api.updateProject(project.id, { automationPaused: !project.automationPaused }),
+    onSuccess: (p) => qc.setQueryData(keys.project(p.id), p),
+  });
+  return (
+    <div className="flex shrink-0 flex-col items-end gap-1">
+      <div className="flex items-center gap-2">
+        {project.automationPaused && <span className="text-xs text-amber-300">Paused: no agent work starts here</span>}
+        <Button
+          onClick={() => toggle.mutate()}
+          disabled={toggle.isPending}
+          title={
+            project.automationPaused
+              ? "Let queued tasks start and automation act again"
+              : "Hold queued role tasks and all automation in this project. Running agents finish their current turn; your chats still run."
+          }
+        >
+          {project.automationPaused ? "▶ Resume project" : "⏸ Pause project"}
+        </Button>
+      </div>
+      <ErrorNote error={toggle.error} />
     </div>
   );
 }

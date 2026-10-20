@@ -54,6 +54,8 @@ export interface SchedulerState {
   staffedRoles: Set<string>;
   // Projects with an open emergency task.
   frozenProjects: Set<string>;
+  // Projects whose agent work the owner paused.
+  pausedProjects?: Set<string>;
   active: ActiveRun[];
   queued: QueuedRun[];
   providerHolds?: Map<Provider, ProviderHold>;
@@ -79,6 +81,9 @@ export const isBlockedReason = (reason: string) => /^Baseline:/.test(reason) && 
 
 export const isHeldReason = (reason: string) => /daily budget|emergency task|^Coordinator:/.test(reason);
 
+// Not a held reason: the owner paused the project on purpose, so its queue does not ask for them.
+export const PROJECT_PAUSED = "The project is paused. Resume it to let its agents work.";
+
 // Queue order inside a department, and among emergencies: higher priority first, then older.
 export function byPriority(a: QueuedRun, b: QueuedRun): number {
   return b.priority - a.priority || a.queuedAt.localeCompare(b.queuedAt) || a.runId.localeCompare(b.runId);
@@ -98,6 +103,8 @@ export function plan(input: SchedulerState): Plan {
   // limit and the freeze (they are the reason for it), but still need an agent and must not edit
   // files alongside another writer of their department.
   const blocker = (q: QueuedRun): string | null => {
+    // The owner's pause comes first, even before an emergency: they chose to put this project aside.
+    if (!q.forced && input.pausedProjects?.has(q.projectId)) return PROJECT_PAUSED;
     if (q.dependencyBlocker) return q.dependencyBlocker;
     const dept = input.departments.get(q.departmentId);
     const deptName = dept?.name ?? "Its department";

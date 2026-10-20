@@ -296,6 +296,11 @@ const MIGRATIONS: (string | ((db: Db) => void))[] = [
     dispatched INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(project_id, day, kind)
   );`,
+  // 13: The owner can pause a project's agent work to prioritize other projects.
+  (db) => {
+    const columns = new Set((db.prepare("PRAGMA table_info(projects)").all() as { name: string }[]).map((c) => c.name));
+    if (!columns.has("automation_paused")) db.exec("ALTER TABLE projects ADD COLUMN automation_paused INTEGER NOT NULL DEFAULT 0");
+  },
 ];
 
 export type Db = DatabaseSync;

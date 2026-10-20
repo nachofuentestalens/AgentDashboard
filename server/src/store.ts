@@ -104,6 +104,7 @@ const toProject = (r: Row): Project => ({
   autoContinueSteps: Number(r.auto_continue_steps ?? 0),
   startNextWhenIdle: r.start_next_when_idle === 1,
   autoApprove: r.auto_approve === 1,
+  automationPaused: r.automation_paused === 1,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
 });
@@ -549,6 +550,7 @@ export class Store {
         | "autoContinueSteps"
         | "startNextWhenIdle"
         | "autoApprove"
+        | "automationPaused"
       >
     >,
   ): Project | null {
@@ -558,7 +560,7 @@ export class Store {
     this.db
       .prepare(
         `UPDATE projects SET name = ?, repo_path = ?, default_provider = ?, default_model = ?, default_effort = ?, allowed_tools = ?, auto_review = ?,
-           auto_continue_steps = ?, start_next_when_idle = ?, auto_approve = ?, updated_at = ? WHERE id = ?`,
+           auto_continue_steps = ?, start_next_when_idle = ?, auto_approve = ?, automation_paused = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.name,
@@ -571,6 +573,7 @@ export class Store {
         next.autoContinueSteps,
         next.startNextWhenIdle ? 1 : 0,
         next.autoApprove ? 1 : 0,
+        next.automationPaused ? 1 : 0,
         now(),
         id,
       );

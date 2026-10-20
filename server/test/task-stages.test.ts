@@ -258,6 +258,19 @@ describe("task stages", () => {
     expect(app.store.listMessages(first.id)[0]!.text).toBe("Start on this task: Urgent check");
   });
 
+  it("holds queued work and automation while the owner pauses the project, and resumes them", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: true, startNextWhenIdle: true });
+    const queued = await newTask(app, projectId, { roleId: qa.id, message: "check this", priority: 9 });
+    const backlog = await newTask(app, projectId, { roleId: qa.id, title: "Later check" });
+    await waitFor(() => app.store.listRuns(queued.id)[0]?.waitReason?.includes("project is paused") === true);
+    expect(app.store.listRuns(backlog.id)).toEqual([]);
+
+    await api(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: false });
+    await stepFinished(app, queued.id);
+    await stepFinished(app, backlog.id);
+  });
+
   it("starts more backlog work as soon as the provider's agent limit is raised", async () => {
     const { app, projectId, qa } = await roleProject();
     await api(app, "POST", `/api/roles/${qa.id}/agents`, {});

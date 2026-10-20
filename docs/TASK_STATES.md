@@ -247,6 +247,12 @@ count of automatic continues and fixes lives on the task (`autoContinues`) and r
 stage. Each agent review records the checkpoint it read (`task_reviews.reviewed_commit`): auto-review skips a finished step that
 changed no files since a passed review, so a status question to a task in `needs_review` does not start another review.
 
+**Pausing a project** (`automationPaused`, the Pause/Resume button in the project header) lets the owner put a project's work aside
+to prioritize others. While paused, none of its queued role runs start, not even emergencies (the scheduler says why, and "Run anyway"
+still starts one). None of the automation above acts. Daily company assignments are not created, and the coordinator neither starts
+its backlog nor resumes its tasks. Running agents finish their current turn, and plain chats are unaffected. Resuming lets the queue
+and automation continue.
+
 ## Rollout
 
 1. `stages.ts` with a table test; migration and shared types; set `stage` in runner and routes; remove `done` from `TaskStatus`; the actions endpoint. The UI shows a stage pill only.
