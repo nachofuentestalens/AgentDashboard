@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { DEFAULT_COORDINATOR_CONFIG, type CoordinatorView } from "@ad/shared";
 import type { App } from "../src/app.ts";
 import { baselineBlocker } from "../src/readiness.ts";
 import { Workspaces } from "../src/workspaces.ts";
@@ -65,6 +66,55 @@ describe("task prerequisites", () => {
     expect(app.store.listRuns(b.id)).toEqual([]);
     await api(app, "POST", `/api/tasks/${a.id}/actions`, { action: "approve" });
     await stepFinished(app, b.id);
+  });
+
+  it.each([false, true])("does not reserve provider, role or writer capacity for a blocked queue (editing: %s)", async (canEdit) => {
+    const { projectId, roleId } = await setup();
+    app.store.updateRole(roleId, { canEdit });
+    await api(app, "PATCH", "/api/settings", { maxConcurrentRuns: { claude: 1, codex: 1 } });
+    await api(app, "POST", "/api/coordinator/readings", {
+      provider: "codex",
+      window: "session",
+      usedPercent: 1,
+      resetsAt: new Date(Date.now() + 5 * 3_600_000).toISOString(),
+    });
+    const ready = await newTask(app, projectId, { roleId, canEdit, title: "Ready prerequisite" });
+    const blocked = await newTask(app, projectId, {
+      roleId,
+      canEdit,
+      provider: "codex",
+      priority: 10,
+      dependencyIds: [ready.id],
+      message: "Wait for prerequisite",
+    });
+    await waitFor(() => !!app.store.listRuns(blocked.id)[0]?.waitReason?.startsWith("Dependency:"));
+    await api(app, "PATCH", `/api/projects/${projectId}`, { startNextWhenIdle: true });
+    await stepFinished(app, ready.id);
+    expect(app.store.listRuns(ready.id)[0]!.provider).toBe("codex");
+    expect(app.store.listRuns(blocked.id)[0]!.status).toBe("queued");
+    expect((await api(app, "POST", `/api/tasks/${ready.id}/actions`, { action: "approve" })).status).toBe(200);
+    await stepFinished(app, blocked.id);
+  });
+
+  it("lets coordinator fill-idle find ready work without counting or reassigning dependency-blocked queues", async () => {
+    const { projectId, roleId } = await setup();
+    const ready = await newTask(app, projectId, { roleId, provider: "codex" });
+    const blocked = await newTask(app, projectId, { roleId, provider: "codex", dependencyIds: [ready.id], message: "dependent" });
+    await waitFor(() => !!app.store.listRuns(blocked.id)[0]?.waitReason?.startsWith("Dependency:"));
+    await api(app, "POST", "/api/coordinator/readings", {
+      provider: "codex",
+      window: "session",
+      usedPercent: 1,
+      resetsAt: new Date(Date.now() + 5 * 3_600_000).toISOString(),
+    });
+    const config = { ...DEFAULT_COORDINATOR_CONFIG, mode: "advise", fillIdle: true };
+    const view = (await api<CoordinatorView>(app, "PUT", "/api/coordinator/config", config)).body;
+    expect(view.providers.find((p) => p.provider === "codex")!.queued).toBe(0);
+    expect(view.recommendations.some((a) => a.type === "start" && a.taskId === ready.id)).toBe(true);
+    expect(view.recommendations.some((a) => a.taskId === blocked.id)).toBe(false);
+    await api(app, "PUT", "/api/coordinator/config", { ...config, mode: "auto" });
+    await stepFinished(app, ready.id);
+    expect(app.store.listRuns(blocked.id)[0]!.status).toBe("queued");
   });
 
   it("does not reuse an old approval after reopening and dropping a prerequisite", async () => {

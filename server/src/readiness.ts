@@ -1,6 +1,14 @@
-import type { Task } from "@ad/shared";
+import type { Run, Task } from "@ad/shared";
 import { git } from "./git.ts";
 import type { Store } from "./store.ts";
+
+// Waiting for prerequisites reserves no execution capacity. Recheck saved dependencies rather
+// than the last wait reason, which may be stale after an approval. Reviews remain independent.
+export function dependencyBlockedQueue(store: Store, run: Run): boolean {
+  if (run.status !== "queued" || run.purpose !== "work") return false;
+  const task = store.getTask(run.taskId);
+  return !!task && !!store.dependencyBlocker(task);
+}
 
 // Check the actual execution checkout, including persistent worktrees that may be stale.
 // Approval alone cannot make another branch's files visible here.
