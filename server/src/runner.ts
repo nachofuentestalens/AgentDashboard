@@ -7,6 +7,7 @@ import readline from "node:readline";
 import {
   createCodexParser,
   finalText,
+  effortFor,
   parseClaudeLine,
   parseReplyBlocks,
   PROVIDERS,
@@ -571,6 +572,10 @@ export class Runner {
     return this.choice(task).provider;
   }
 
+  taskEffort(task: Task): Effort {
+    return this.choice(task).effort;
+  }
+
   // The provider a queued or running run uses (a review uses its reviewer's choice).
   runProvider(run: Run): Provider {
     const task = this.store.getTask(run.taskId);
@@ -676,12 +681,19 @@ export class Runner {
     // Runs the start when the task fits, and counts it against the role, provider and writer slot.
     const tryStart = (task: Task, begin: () => void) => {
       if (!task.roleId || (roleLoad.get(task.roleId) ?? 0) >= (agents.get(task.roleId) ?? 0) || this.store.dependencyBlocker(task)) return;
-      const provider = this.taskProvider(task);
+      const current = this.taskProvider(task);
+      const provider = task.emergency
+        ? current
+        : (this.coordinator?.selectAutomaticProvider?.(current, this.taskEffort(task), providerLoad, limits) ?? current);
       if ((providerLoad.get(provider) ?? 0) >= limits[provider]) return;
       const role = this.store.getRole(task.roleId);
       const edits = !!role?.canEdit && task.canEdit;
       if (edits && writers.has(role!.departmentId)) return;
       try {
+        if (provider !== current) {
+          const updated = this.store.updateTask(task.id, { provider, model: null, effort: effortFor(provider, this.taskEffort(task)) });
+          if (updated) this.bus.publish({ type: "task_updated", task: updated });
+        }
         begin();
         add(roleLoad, task.roleId);
         add(providerLoad, provider);

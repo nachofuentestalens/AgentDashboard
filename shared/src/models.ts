@@ -667,7 +667,7 @@ export interface CoordinatorConfig {
   conservePriority: number;
   pauseRunning: boolean;
   resumePaused: boolean;
-  // Start backlog work with spare usage and route automated project work by provider headroom/load.
+  // Start backlog work with spare usage. Project automation routes providers independently.
   fillIdle: boolean;
   // Move held work to the other provider when that one has room.
   switchProvider: boolean;

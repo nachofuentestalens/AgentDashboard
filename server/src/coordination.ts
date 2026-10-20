@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   applyCoordinatorBody,
+  effortFor,
   coordinatorConfigBody,
   DEFAULT_COORDINATOR_CONFIG,
   PROVIDERS,
@@ -10,6 +11,8 @@ import {
   type CoordinatorLogEntry,
   type CoordinatorView,
   type Provider,
+  type Effort,
+  type ProviderLimits,
   type ProviderQuotaView,
   type QuotaReading,
   type QuotaWindow,
@@ -17,6 +20,7 @@ import {
 import type { Bus } from "./bus.ts";
 import {
   decide,
+  selectProvider,
   estimateWindow,
   nextWeeklyReset,
   providerHolds,
@@ -181,7 +185,9 @@ export class Coordinator implements RunCoordinator {
   private input(config: CoordinatorConfig, providers: ProviderQuotaView[], now: number): CoordinatorInput {
     const ref = (taskId: string) => {
       const task = this.store.getTask(taskId);
-      return task ? { task, ref: { taskId, title: task.title, provider: this.runner.taskProvider(task), priority: task.priority } } : null;
+      return task
+        ? { task, ref: { taskId, title: task.title, provider: this.runner.taskProvider(task), priority: task.priority, effort: this.runner.taskEffort(task) } }
+        : null;
     };
     const running: CoordinatorInput["running"] = [];
     for (const a of this.runner.activeRuns()) {
@@ -244,9 +250,11 @@ export class Coordinator implements RunCoordinator {
         title: t.title,
         provider: this.runner.taskProvider(t),
         priority: t.priority,
+        effort: this.runner.taskEffort(t),
         automatic: !!this.store.getProject(t.projectId)?.startNextWhenIdle,
       }));
-    const states = new Map<Provider, ProviderState>(providers.map((p) => [p.provider, p]));
+    const limits = this.store.getSettings().maxConcurrentRuns;
+    const states = new Map<Provider, ProviderState>(providers.map((p) => [p.provider, { ...p, maxConcurrent: limits[p.provider] }]));
     return { now, config, providers: states, running, queued, paused, backlog };
   }
 
@@ -256,6 +264,14 @@ export class Coordinator implements RunCoordinator {
     const providers = this.providerStates(config, now);
     const input = this.input(config, providers, now);
     return { config, providers, input, actions: decide(input) };
+  }
+
+  // Project automation explicitly authorizes assignment, independently of optional coordinator actions.
+  selectAutomaticProvider(current: Provider, effort: Effort, loads: Map<Provider, number>, limits: ProviderLimits): Provider {
+    const config = this.config();
+    const now = this.clock();
+    const providers = new Map(this.providerStates(config, now).map((p) => [p.provider, p]));
+    return selectProvider(current, effort, providers, config, now, loads, (p) => (loads.get(p) ?? 0) < limits[p]);
   }
 
   beforeSchedule(): Map<Provider, ProviderHold> {
@@ -291,6 +307,11 @@ export class Coordinator implements RunCoordinator {
     return this.view();
   }
 
+  private assignProvider(taskId: string, provider: Provider) {
+    const task = this.store.getTask(taskId);
+    return task ? this.store.updateTask(taskId, { provider, model: null, effort: effortFor(provider, this.runner.taskEffort(task)) }) : null;
+  }
+
   private async apply(action: CoordinatorAction, by: CoordinatorLogEntry["by"]): Promise<CoordinatorLogEntry> {
     let error: string | null = null;
     try {
@@ -310,14 +331,14 @@ export class Coordinator implements RunCoordinator {
         }
         case "start":
           if (action.to) {
-            const task = this.store.updateTask(action.taskId, { provider: action.to, model: null, effort: null });
+            const task = this.assignProvider(action.taskId, action.to!);
             if (task) this.bus.publish({ type: "task_updated", task });
           }
           this.runner.stageAction(action.taskId, { action: "start" });
           break;
         case "switch": {
-          // The task's own model and effort belong to the old provider; the role's or project's apply.
-          const task = this.store.updateTask(action.taskId, { provider: action.to, model: null, effort: null });
+          // Models are provider-specific; preserve the task's size signal across assignment.
+          const task = this.assignProvider(action.taskId, action.to!);
           if (task) this.bus.publish({ type: "task_updated", task });
           this.runner.tick();
           break;
