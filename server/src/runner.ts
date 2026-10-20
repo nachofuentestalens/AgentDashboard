@@ -268,7 +268,8 @@ export class Runner {
 
   // The owner moves a role task through its stages. Moves that start work send a message, and the
   // run start applies the stage change; the others only change the stage.
-  stageAction(taskId: string, action: Exclude<TaskAction, { action: "review" }>, deliveryApproval = false): Task {
+  // reviewer: who decided, "owner" or the inbox steward's role id.
+  stageAction(taskId: string, action: Exclude<TaskAction, { action: "review" }>, deliveryApproval = false, reviewer = "owner"): Task {
     if (deliveryApproval && action.action !== "approve") throw new RunnerError("Delivery may only approve the reviewed task.", 400);
     const task = this.requireIdleTask(taskId, deliveryApproval);
     if (!task.roleId || !task.stage) throw new RunnerError("Only a role's task has stages. Use Mark done for a chat.", 400);
@@ -300,13 +301,13 @@ export class Runner {
         return this.store.getTask(task.id)!;
       }
       case "request_changes":
-        this.store.addTaskReview({ taskId: task.id, runId: null, reviewer: "owner", verdict: "changes", findings: [action.text] });
+        this.store.addTaskReview({ taskId: task.id, runId: null, reviewer, verdict: "changes", findings: [action.text] });
         break;
       case "approve": {
         const open = this.store.openChildTasks(task.id);
         if (open.length && !action.force)
           throw new RunnerError(`Delegated work is still open: ${open.map((t) => t.title).join(", ")}. Approve anyway to continue.`, 409);
-        this.store.addTaskReview({ taskId: task.id, runId: null, reviewer: "owner", verdict: "approved", findings: [] });
+        this.store.addTaskReview({ taskId: task.id, runId: null, reviewer, verdict: "approved", findings: [] });
         const workspace = this.store.getWorkspace(task.id);
         if (workspace) this.store.saveWorkspace({ ...workspace, approvedCommit: workspace.checkpointCommit });
         break;
@@ -958,6 +959,8 @@ export class Runner {
     const task = this.store.getTask(taskId);
     const project = task ? this.store.getProject(task.projectId) : null;
     if (!task || !project || project.automationPaused || task.status !== "idle") return false;
+    // The inbox steward's triage is not work to review or continue: the steward closes it itself.
+    if (this.store.isStewardTask(task.id)) return false;
     try {
       if (ended.purpose === "review" && task.stage === "changes_requested") {
         const review = this.store.listTaskReviews(task.id).at(-1);

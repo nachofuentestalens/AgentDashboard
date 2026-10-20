@@ -1,5 +1,6 @@
 import {
   effortFor,
+  inboxKeys,
   MAX_DELEGATION_DEPTH,
   MAX_PRIORITY,
   parseReplyBlocks,
@@ -12,6 +13,8 @@ import {
   type Proposal,
   type Provider,
   type Run,
+  type StewardItem,
+  type StewardItemKind,
   type Studio as StudioView,
   type Task,
 } from "@ad/shared";
@@ -240,6 +243,12 @@ export class Studio implements ReplyHandler {
         if (task.roleId) plan = block.steps;
       } else if (block.type === "review") {
         // Only a review run's verdict counts, and the runner reads that itself.
+      } else if (block.type === "decision") {
+        // Recorded now and acted on by the steward once its run has ended (steward.ts).
+        if (!this.store.isStewardTask(task.id))
+          notices.push({ level: "warn", text: "Ignored a decision block: only the inbox steward's triage tasks decide inbox items." });
+        else if (this.store.recordStewardDecision(task.id, block.item, block)) notices.push({ level: "info", text: `Decided ${block.item}: ${block.action}.` });
+        else notices.push({ level: "warn", text: `Ignored a decision for ${block.item}: it is not an open item of this triage.` });
       } else if (block.type === "question") {
         questions.push(block.question);
       } else if (block.type === "proposal") {
@@ -330,7 +339,8 @@ export class Studio implements ReplyHandler {
 
   // ---- the owner's inbox
 
-  inbox(): Inbox {
+  // Every waiting item, before the inbox steward takes its share.
+  allInbox(): Omit<Inbox, "steward" | "stewardNotes" | "count"> {
     const projects = new Map(this.store.listProjects().map((p) => [p.id, p]));
     const name = (id: string) => projects.get(id)?.name ?? "?";
     const proposals = this.store.pendingProposals().map((p) => {
@@ -352,10 +362,48 @@ export class Studio implements ReplyHandler {
     const blocked = queued(isBlockedReason);
     const inStage = (stage: "needs_review" | "changes_requested") =>
       this.store.tasksInStage(stage).map((task) => ({ task, projectName: name(task.projectId) }));
-    const reviews = inStage("needs_review");
-    const changes = inStage("changes_requested");
+    return { proposals, handoffs, questions, reviews: inStage("needs_review"), changes: inStage("changes_requested"), held, blocked };
+  }
+
+  // The owner's inbox: on a project with the steward, only what it escalated, with its reason.
+  inbox(): Inbox {
+    const all = this.allInbox();
+    const projects = new Map(this.store.listProjects().map((p) => [p.id, p]));
+    const items = this.store.stewardItems({ limit: 2000 });
+    const byKey = new Map(items.map((i) => [`${i.projectId}/${i.key}`, i]));
+    const stewardNotes: Record<string, string> = {};
+    // Items the steward has not picked up yet: it does within moments, and the owner hears only what it escalates.
+    const unrouted: StewardItem[] = [];
+    const owner = (projectId: string, kind: StewardItemKind, key: string, title: string, taskId?: string) => {
+      if (!projects.get(projectId)?.inboxSteward) return true;
+      // The steward's own work: its questions and holds are the owner's; its finished triage closes by itself.
+      if (taskId && this.store.isStewardTask(taskId)) return kind === "question" || kind === "held" || kind === "blocked";
+      const item = byKey.get(`${projectId}/${key}`);
+      if (!item) unrouted.push({ projectId, key, kind, title, taskId: null, status: "triaging", action: null, note: null, createdAt: "", decidedAt: null });
+      if (item?.status === "escalated") stewardNotes[key] = item.note ?? "";
+      return item?.status === "escalated";
+    };
+    const proposals = all.proposals.filter((p) => owner(p.projectId, "proposal", inboxKeys.proposal(p), `Proposal for ${p.docPath}`));
+    const handoffs = all.handoffs.filter((h) => owner(h.projectId, "handoff", inboxKeys.handoff(h), `Task request "${h.title}" for ${h.toRoleName}`));
+    const questions = all.questions.filter((q) =>
+      owner(q.task.projectId, "question", inboxKeys.question(q.task), `Question from "${q.task.title}"`, q.task.id),
+    );
+    const reviews = all.reviews.filter((r) => owner(r.task.projectId, "review", inboxKeys.review(r.task), `Review "${r.task.title}"`, r.task.id));
+    const changes = all.changes.filter((r) =>
+      owner(r.task.projectId, "changes", inboxKeys.changes(r.task), `Changes requested on "${r.task.title}"`, r.task.id),
+    );
+    const held = all.held.filter((h) => owner(h.task.projectId, "held", inboxKeys.held(h.run), `"${h.task.title}" is held`, h.task.id));
+    const blocked = all.blocked.filter((h) => owner(h.task.projectId, "blocked", inboxKeys.blocked(h.run), `"${h.task.title}" is blocked`, h.task.id));
+    const named = (i: StewardItem) => ({ ...i, projectName: projects.get(i.projectId)?.name ?? "?" });
+    const steward = {
+      triaging: [...items.filter((i) => i.status === "triaging" && projects.get(i.projectId)?.inboxSteward), ...unrouted].map(named),
+      handled: items
+        .filter((i) => i.status === "handled")
+        .slice(0, 20)
+        .map(named),
+    };
     const count = proposals.length + handoffs.length + questions.length + reviews.length + changes.length + held.length + blocked.length;
-    return { proposals, handoffs, questions, reviews, changes, held, blocked, count };
+    return { proposals, handoffs, questions, reviews, changes, held, blocked, steward, stewardNotes, count };
   }
 
   private pendingProposal(id: string): { proposal: Proposal; repo: string } {
@@ -367,7 +415,7 @@ export class Studio implements ReplyHandler {
     return { proposal, repo: project.repoPath };
   }
 
-  async acceptProposal(id: string, editedBody?: string): Promise<{ proposal: Proposal; commitError: string | null }> {
+  async acceptProposal(id: string, editedBody?: string, acceptedBy = "the owner"): Promise<{ proposal: Proposal; commitError: string | null }> {
     const { proposal, repo } = this.pendingProposal(id);
     const edited = editedBody !== undefined && editedBody !== proposal.body;
     const body = editedBody ?? proposal.body;
@@ -376,7 +424,7 @@ export class Studio implements ReplyHandler {
       files: [{ path: proposal.docPath, content: body }],
       decision: {
         title: `${proposal.docPath} updated`,
-        body: `Proposed by ${by}${edited ? " and edited by the owner" : ""}; accepted by the owner.${proposal.rationale ? `\n\n${proposal.rationale}` : ""}`,
+        body: `Proposed by ${by}${edited ? " and edited by the owner" : ""}; accepted by ${acceptedBy}.${proposal.rationale ? `\n\n${proposal.rationale}` : ""}`,
       },
       message: `Update ${proposal.docPath} (proposal by ${by})\n\n${proposal.rationale}`.trim(),
     });

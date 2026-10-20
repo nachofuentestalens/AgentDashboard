@@ -51,6 +51,21 @@ describe("reply blocks", () => {
     ]);
   });
 
+  it("reads the inbox steward's decision blocks, which need a reason", () => {
+    const blocks = parseReplyBlocks(
+      [
+        fence("decision", JSON.stringify({ item: "question:t:1", action: "answer", text: "Yes.", reason: "The design says so." })),
+        fence("decision", JSON.stringify({ item: "handoff:h", action: "escalate", text: "", reason: "Costs money." })),
+        fence("decision", JSON.stringify({ item: "proposal:p", action: "accept" })),
+      ].join("\n"),
+    );
+    expect(blocks).toMatchObject([
+      { type: "decision", item: "question:t:1", action: "answer", text: "Yes.", reason: "The design says so." },
+      { type: "decision", item: "handoff:h", action: "escalate", text: null },
+      { type: "invalid", lang: "decision" },
+    ]);
+  });
+
   it("clamps and rounds priorities instead of refusing them", () => {
     const blocks = parseReplyBlocks(
       [

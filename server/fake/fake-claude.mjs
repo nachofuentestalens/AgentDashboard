@@ -3,6 +3,7 @@
 // It speaks the same line protocol, spends nothing and needs no account.
 // Keywords in the prompt pick a scenario: [tool] runs a fake tool call, [fail] ends with an error
 // result, [crash] exits without a result, [slow] keeps streaming for a long time (to test Stop).
+// An inbox steward prompt ("Item key:" lines) gets one decision block per item.
 // Studio scenarios end the reply with blocks: [proposal:design/x.md], [task:Role Name:7],
 // [emergency:Role Name], [question], [badblock], [plan], [step-done|complete|partial], and in review runs
 // [review-pass|changes]. [cost:1.5] reports that cost; [args] and
@@ -181,6 +182,16 @@ if (prompt.includes("[plan]")) blocks.push(fence("plan", JSON.stringify({ steps:
 for (const state of ["done", "complete", "partial"]) {
   if (prompt.includes(`[step-${state}]`))
     blocks.push(fence("step", JSON.stringify({ state, summary: `Fake step ${state}.`, next: state === "complete" ? null : "Tune the dash cooldown." })));
+}
+// The inbox steward's triage: one decision per item, chosen by the item's kind.
+for (const [, item, kind] of prompt.matchAll(/^Item key: ((\w+):\S+)$/gm)) {
+  const decision = {
+    question: { action: "answer", text: "Use a shield." },
+    proposal: { action: "accept" },
+    held: { action: "wait" },
+    blocked: { action: "wait" },
+  }[kind] ?? { action: "escalate", text: "Approve it." };
+  blocks.push(fence("decision", JSON.stringify({ item, ...decision, reason: `Fake steward decided ${kind}.` })));
 }
 if (blocks.length) await say(`Here is what I need.\n\n${blocks.join("\n\n")}`);
 

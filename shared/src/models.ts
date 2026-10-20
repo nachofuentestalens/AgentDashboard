@@ -1,5 +1,7 @@
 // Shapes the server returns and the web app renders. The database rows map onto these one to one.
 
+import type { StewardItem } from "./steward.ts";
+
 // The coding agents the dashboard can run: Claude Code (`claude -p`) or OpenAI's Codex CLI (`codex exec`).
 export const PROVIDERS = [
   { id: "claude", label: "Claude" },
@@ -106,6 +108,8 @@ export interface Project {
   // The owner paused the project's agent work: no role task run starts and no automation acts
   // (plain chats and "run anyway" still do). Running agents finish their current turn.
   automationPaused: boolean;
+  // The inbox steward triages this project's inbox first and escalates only what it cannot decide.
+  inboxSteward: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -583,6 +587,10 @@ export interface Inbox {
   held: InboxRun[];
   // Queued runs whose prerequisites are not in their baseline: they wait until the owner integrates them.
   blocked: InboxRun[];
+  // Items the inbox steward is deciding or recently handled; their groups above leave them out.
+  steward: { triaging: (StewardItem & { projectName: string })[]; handled: (StewardItem & { projectName: string })[] };
+  // The steward's reason for each escalated item still waiting, by inboxKeys key.
+  stewardNotes: Record<string, string>;
   count: number;
 }
 
