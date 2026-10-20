@@ -1,6 +1,6 @@
 name: CI
 
-# Only pull requests: a squash merge lands the tree its pull request already checked, so re-running on main doubled the minutes.
+# Only pull requests: a squash merge lands the tree its pull request already checked, so re-running on main only duplicated work.
 on:
   pull_request:
   workflow_dispatch:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 jobs:
-  # One Linux job: every extra job pays setup again and rounds up to a whole billed minute (docs/CI.md).
+  # Formatting, types, the Linux unit run and the browser suite share one job, so setup is paid once.
   checks:
     runs-on: ubuntu-latest
     # The time budget (docs/CI.md). Raising it needs a justification in the pull request.
@@ -40,3 +40,26 @@ jobs:
           name: e2e
           path: test-results/
           if-no-files-found: ignore
+
+  # Process-heavy API suites run several times slower on Windows, so they are split into parallel parts (scripts/test-part.mjs).
+  windows:
+    name: windows (part ${{ matrix.part }})
+    runs-on: windows-latest
+    # The same time budget as `checks`.
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
+    steps:
+      # Real-time scanning of node_modules and spawned agent processes is the main slowdown on Windows runners.
+      - shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/test-part.mjs ${{ matrix.part }}
