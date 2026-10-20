@@ -71,3 +71,30 @@ After the Claude session reset, the coordinator was in auto mode with Claude at 
 The repair stopped the queued run, merged the baseline into M1-07's worktree with `--no-commit`, and took the baseline's version of both files with M1-07's `zod` additions re-applied. `npm install --package-lock-only` left the lockfile content unchanged. The dashboard then recorded the merge through `POST /api/tasks/:id/checkpoint`, giving checkpoint `3bdded08` with parents `9a825b0` and `1c659bc`, published to draft PR #5. The run was then retried. A merge made through the checkpoint endpoint keeps the "branch changed outside the dashboard" guard satisfied. A plain `git commit` in the worktree would not.
 
 With `maxConcurrentRuns` at 1, any running owner chat takes the only slot, so queued milestone work waits for it.
+
+## Realignment with the owner's goals: 2026-10-20
+
+M1 (M1-01 to M1-16) is approved and integrated. The owner playtested it and found it far too basic: fights were boring and did not show each unit's actions or HP, unlike the Idle Adventure reference. The Director's M2 plan still excluded new classes, specializations and crafting. It had also deadlocked. Every M2 task depended on the planning task M2-00, which created its successors one wave at a time and could not be approved until all of them existed. M2-02 sat queued on "waiting for owner approval of M2-00". The owner-requested combat replay work (chat `ca609d26`, PR #20) was never integrated, because plain chats have no stage.
+
+Supervision causes found:
+
+- Engineering, Design and QA had `autonomy: ask`, so every task block they wrote waited in the owner's Inbox.
+- Agents asked the owner about evidence sufficiency and acceptance (the malformed-JSON fix asked three times). Answers were committed to `design/decisions.md` in the live checkout, which task worktrees never see, so agents concluded the question was still open.
+- Accepted proposals and decision records were committed to the live checkout's `main`, which diverged from the managed baseline. Approved work never reached GitHub `main`, and every task PR stayed open.
+- `maxConcurrentRuns.claude` was 1, so any owner chat stalled all milestone work.
+- Company daily reviews were disabled.
+
+Applied live:
+
+- All departments set to `autonomy: auto`. Claude concurrency raised to 2 (usage was 3% session, 7% weekly; the coordinator's reserves still apply).
+- M2-00 and M2-02 closed (their run stopped). M2-01, M2-07 and M2-08 kept. The malformed-JSON question answered (close on QA's 14/14 rerun, without being recorded in the live decision log), and M2-07 told to write its addendum.
+- A new M2 graph `[M2-20]`..`[M2-30]` created directly, with dependencies only between work tasks: Director brief, then landing the combat replay branch, combat v2/classes/dual classes/skills/formation spec, gear/crafting spec, copy, contracts, engine, server and full battle view, balance, QA playtest, and verdict plus M3 plan.
+- Company brief updated with the M2 bar and daily Director/QA reviews enabled.
+- GitHub `main` reconciled once: `a72d6f9` merges the baseline `6acb778` with GitHub's decision commits. It keeps the baseline's `contracts.md`, because the conflicting effectiveStats proposal was already implemented there. The game folder's checkout was not changed; run `git pull --ff-only` there.
+
+Code in this branch (needs deployment): hands-off delivery now publishes each integrated baseline to the GitHub default branch, absorbing clean GitHub-side commits. Hands-off agents are also told to decide routine questions themselves and to use task blocks instead of proposals.
+
+Still open:
+
+- One edit denial in M2-07 (`Edit(./qa/**)` refused for `qa/reports/M2-07.md`) could not be reproduced with CLI 2.1.282.
+- Proposals and owner answers still write to the live checkout; they reach the baseline only once someone pushes that checkout to GitHub.

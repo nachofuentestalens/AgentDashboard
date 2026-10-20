@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import type { Task } from "@ad/shared";
-import { studioContext } from "../src/prompts.ts";
+import type { Department, Role, Task } from "@ad/shared";
+import { roleSystemPrompt, studioContext } from "../src/prompts.ts";
 
 const base = {
   departments: [],
@@ -18,4 +18,13 @@ it("bounds injected documents and omits their contents on resumed turns", () => 
   expect(resumed).not.toContain("design/large.md");
   expect(resumed).toContain("catalog unchanged");
   expect(resumed).toContain("Fix bug");
+});
+
+it("tells hands-off agents to decide routine questions themselves", () => {
+  const department = { id: "d", name: "QA", folders: ["qa"] } as Department;
+  const input = { projectName: "Game", department, departments: [department], role: { name: "QA Tester", brief: "", canEdit: true } as Role, agentName: "Ada" };
+  expect(roleSystemPrompt(input)).not.toContain("Hands-off delivery");
+  const handsOff = roleSystemPrompt({ ...input, handsOff: true });
+  expect(handsOff).toContain("## Hands-off delivery");
+  expect(handsOff).toContain("task block instead of a proposal");
 });

@@ -7,8 +7,27 @@ import { describeArea, DECISIONS_DOC } from "./folders.ts";
 
 const CONTEXT_DOC_CHARS = 8_000;
 
-export function roleSystemPrompt(input: { projectName: string; department: Department; departments: Department[]; role: Role; agentName: string }): string {
+export function roleSystemPrompt(input: {
+  projectName: string;
+  handsOff?: boolean;
+  department: Department;
+  departments: Department[];
+  role: Role;
+  agentName: string;
+}): string {
   const { role, department } = input;
+  // Under hands-off delivery nobody watches the inbox, so a question or proposal stalls the work.
+  const handsOff = input.handsOff
+    ? [
+        "",
+        "## Hands-off delivery",
+        "",
+        "The owner has delegated day-to-day decisions: an agent reviewer approves finished work, which is then integrated and published to GitHub automatically.",
+        "Decide scope, sequencing, evidence and acceptance questions yourself from the design documents and the task, state your assumptions in your report, and keep going.",
+        "Ask a question only to spend money, delete the owner's data, or settle a game-direction choice the documents leave open. To change a document another department owns, send that role a task block instead of a proposal.",
+        `The owner's answer to a question arrives as your next message; ${DECISIONS_DOC} in your checkout may not include it yet.`,
+      ]
+    : [];
   const area = role.canEdit
     ? [
         `You may edit files ${describeArea(department, input.departments)}. Other departments own the rest; edits there are refused, so ask them with a task block instead.`,
@@ -67,6 +86,7 @@ export function roleSystemPrompt(input: { projectName: string; department: Depar
     "```",
     "",
     "Optional, for work that takes several steps: give a plan on your first reply, and again only when it changes.",
+    ...handsOff,
   ].join("\n");
 }
 
