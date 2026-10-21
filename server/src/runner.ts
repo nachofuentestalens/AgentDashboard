@@ -762,7 +762,7 @@ export class Runner {
       const current = this.taskProvider(task);
       const provider = task.emergency
         ? current
-        : (this.coordinator?.selectAutomaticProvider?.(current, this.taskEffort(task), providerLoad, limits) ?? current);
+        : (this.coordinator?.selectAutomaticProvider?.(current, this.taskEffort(task), providerLoad, limits, task.priority) ?? current);
       if ((providerLoad.get(provider) ?? 0) >= limits[provider]) return;
       const role = this.store.getRole(task.roleId);
       const edits = !!role?.canEdit && task.canEdit;

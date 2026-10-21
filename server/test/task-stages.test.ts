@@ -306,6 +306,33 @@ describe("task stages", () => {
     expect(app.store.listRuns(second.id)[0]).toMatchObject({ provider: "codex", effort: "high" });
   });
 
+  it.each([false, true])("routes priority work to weekly-conserving Codex (already queued: %s)", async (queued) => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PUT", "/api/coordinator/config", { ...DEFAULT_COORDINATOR_CONFIG, mode: "auto", fillIdle: false });
+    await api(app, "POST", "/api/coordinator/readings", {
+      provider: "codex",
+      window: "session",
+      usedPercent: 0,
+      resetsAt: new Date(Date.now() + 5 * 3_600_000).toISOString(),
+    });
+    await api(app, "POST", "/api/coordinator/readings", {
+      provider: "codex",
+      window: "weekly",
+      usedPercent: 28,
+      resetsAt: new Date(Date.now() + 6 * 24 * 3_600_000).toISOString(),
+    });
+    await api(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: true, startNextWhenIdle: true });
+    const task = await newTask(app, projectId, {
+      roleId: qa.id,
+      title: "Important check",
+      priority: 7,
+      ...(queued ? { message: "Check this" } : {}),
+    });
+    await api(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: false });
+    await stepFinished(app, task.id);
+    expect(app.store.listRuns(task.id)[0]!.provider).toBe("codex");
+  });
+
   it("resumes a step its agent left partial when the project opts in, within the continuation limit", async () => {
     const { app, projectId, qa } = await roleProject();
     await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 1 });

@@ -251,6 +251,26 @@ describe("decisions", () => {
     expect(types({ ...snapshot, queued: [{ ...queued[0]!, provider: "codex" }, queued[1]!] })).toEqual([]);
   });
 
+  it("assigns important automatic work to conserving capacity while preserving priority and reserve holds", () => {
+    const providers = new Map<"claude" | "codex", ProviderState>([
+      ["claude", { ...state("ok", 17), running: 2, maxConcurrent: 2 }],
+      ["codex", { ...state("conserve", 0), running: 1, maxConcurrent: 2 }],
+    ]);
+    for (const priority of [6, 7, 10]) {
+      const task = { ...ref("q", priority), automatic: true };
+      const queued = [{ ...task, runId: "r1", emergency: false, forced: false, work: true }];
+      expect(types(input({ queued, providers }))).toEqual(priority >= 7 ? ["switch:q>codex"] : []);
+      expect(types(input({ backlog: [task], providers, config: config({ fillIdle: true }) }))).toEqual(priority >= 7 ? ["start:q>codex"] : ["start:q"]);
+    }
+    const queued = [{ ...ref("q", 10), automatic: true, runId: "r1", emergency: false, forced: false, work: true }];
+    for (const level of ["unknown", "reserve", "exhausted"] as const) {
+      providers.set("codex", state(level, 0));
+      expect(types(input({ queued, providers }))).toEqual([]);
+    }
+    providers.set("codex", { ...state("conserve", 0), running: 2, maxConcurrent: 2 });
+    expect(types(input({ queued, providers }))).toEqual([]);
+  });
+
   it("routes automatic queues without fill-idle and preserves a large task's free-slot assignment", () => {
     const q = { ...ref("q"), automatic: true, effort: "high" as const, runId: "r1", emergency: false, forced: false, work: true };
     const providers = new Map<"claude" | "codex", ProviderState>([
