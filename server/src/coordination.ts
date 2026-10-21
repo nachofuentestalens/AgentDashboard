@@ -272,11 +272,11 @@ export class Coordinator implements RunCoordinator {
   }
 
   // Project automation explicitly authorizes assignment, independently of optional coordinator actions.
-  selectAutomaticProvider(current: Provider, effort: Effort, loads: Map<Provider, number>, limits: ProviderLimits): Provider {
+  selectAutomaticProvider(current: Provider, effort: Effort, loads: Map<Provider, number>, limits: ProviderLimits, priority: number): Provider {
     const config = this.config();
     const now = this.clock();
     const providers = new Map(this.providerStates(config, now).map((p) => [p.provider, p]));
-    return selectProvider(current, effort, providers, config, now, loads, (p) => (loads.get(p) ?? 0) < limits[p]);
+    return selectProvider(current, effort, providers, config, now, loads, (p) => (loads.get(p) ?? 0) < limits[p], priority);
   }
 
   beforeSchedule(): Map<Provider, ProviderHold> {

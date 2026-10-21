@@ -31,7 +31,7 @@ const RANK: Record<QuotaLevel, number> = { unknown: 0, ok: 1, conserve: 2, reser
 export interface RunCoordinator {
   // Called before each scheduling pass: applies automatic decisions and returns the provider holds.
   beforeSchedule(): Map<Provider, ProviderHold>;
-  selectAutomaticProvider?(current: Provider, effort: Effort, loads: Map<Provider, number>, limits: ProviderLimits): Provider;
+  selectAutomaticProvider?(current: Provider, effort: Effort, loads: Map<Provider, number>, limits: ProviderLimits, priority: number): Provider;
   observe(reading: Omit<QuotaReading, "at">): void;
   // Re-reads the providers' usage APIs; without force, skipped right after a read.
   refreshUsage(force?: boolean): Promise<void>;
@@ -165,6 +165,7 @@ export function selectProvider(
   now: number,
   loads: Map<Provider, number>,
   eligible: (provider: Provider) => boolean = () => true,
+  priority = 0,
 ): Provider {
   const capacity = (p: Provider) => {
     const s = providers.get(p)!;
@@ -187,7 +188,11 @@ export function selectProvider(
   };
   const large = effort === "high" || effort === "xhigh" || effort === "max";
   const candidates = PROVIDERS.map(({ id }) => id).filter(
-    (p) => eligible(p) && (loads.get(p) ?? 0) < (providers.get(p)?.maxConcurrent ?? Infinity) && providers.get(p)?.level === "ok" && capacity(p) > 0,
+    (p) =>
+      eligible(p) &&
+      (loads.get(p) ?? 0) < (providers.get(p)?.maxConcurrent ?? Infinity) &&
+      (providers.get(p)?.level === "ok" || (providers.get(p)?.level === "conserve" && priority >= config.conservePriority)) &&
+      capacity(p) > 0,
   );
   if (!candidates.length) return current;
   const score = (p: Provider) => capacity(p) / (large ? 1 : 1 + (loads.get(p) ?? 0));
@@ -277,7 +282,7 @@ export function decide(input: CoordinatorInput): CoordinatorAction[] {
   );
   const room = (p: Provider) => Math.max(0, 100 - config.sessionReservePct - (providers.get(p)?.session.usedPercent ?? 100));
   const bestProvider = (task: TaskRef, eligible?: (p: Provider) => boolean) =>
-    selectProvider(task.provider, task.effort, providers, config, input.now, loads, eligible);
+    selectProvider(task.provider, task.effort, providers, config, input.now, loads, eligible, task.priority);
 
   {
     for (const q of input.queued) {
@@ -308,14 +313,14 @@ export function decide(input: CoordinatorInput): CoordinatorAction[] {
 
   if (config.fillIdle) {
     const selected = new Set<string>();
-    const available = (p: Provider) =>
-      level(p) === "ok" &&
+    const available = (p: Provider, task: TaskRef) =>
+      (level(p) === "ok" || (!!task.automatic && level(p) === "conserve" && task.priority >= config.conservePriority)) &&
       room(p) >= FILL_MIN_HEADROOM_PCT &&
       !selected.has(p) &&
       !input.queued.some((q) => (actions.find((a) => a.type === "switch" && a.runId === q.runId)?.to ?? q.provider) === p);
     for (const next of input.backlog) {
-      const provider = next.automatic ? bestProvider(next, available) : next.provider;
-      if (!available(provider)) continue;
+      const provider = next.automatic ? bestProvider(next, (p) => available(p, next)) : next.provider;
+      if (!available(provider, next)) continue;
       selected.add(provider);
       loads.set(provider, (loads.get(provider) ?? 0) + 1);
       act(
