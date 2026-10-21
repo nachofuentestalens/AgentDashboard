@@ -79,6 +79,25 @@ describe("task stages", () => {
     expect((await act(app, parent.id, { action: "approve", force: true })).body.stage).toBe("approved");
   });
 
+  it("approves a parent before direct and transitive downstream children without dropping their prerequisites", async () => {
+    const { app, projectId, qa } = await roleProject();
+    const parent = await newTask(app, projectId, { roleId: qa.id });
+    const middle = await newTask(app, projectId, { roleId: qa.id, dependencyIds: [parent.id] });
+    const child = (dependencyIds: string[]) =>
+      app.store.createTask({ projectId, roleId: qa.id, parentTaskId: parent.id, title: "Follow-up", canEdit: false, model: null, effort: null, dependencyIds });
+    const direct = child([parent.id]);
+    const indirect = child([middle.id]);
+    const blocking = child([]);
+    app.store.updateTask(parent.id, { stage: "needs_review" });
+    expect(app.store.openChildTasks(parent.id).map((t) => t.id)).toEqual([blocking.id]);
+    expect((await act(app, parent.id, { action: "approve" })).status).toBe(409);
+    await act(app, blocking.id, { action: "close" });
+    expect((await act(app, parent.id, { action: "approve" })).body.stage).toBe("approved");
+    expect(app.store.getTask(direct.id)!.dependencyIds).toEqual([parent.id]);
+    expect(app.store.dependencyBlocker(app.store.getTask(indirect.id)!)).toContain(middle.title);
+    expect(app.store.getTask(direct.id)!.stage).toBe("backlog");
+  });
+
   it("does not hold approval for delegated follow-ups that wait on the parent itself", async () => {
     const { app, projectId, qa } = await roleProject();
     await api(app, "PATCH", `/api/departments/${qa.departmentId}`, { autonomy: "auto" });
