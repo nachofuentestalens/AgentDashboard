@@ -91,7 +91,20 @@ export function roleSystemPrompt(input: {
 }
 
 // The fixed prompt of a review run. The reviewer starts fresh, so everything it needs is here.
-export function reviewPrompt(input: { title: string; request: string; summary: string | null; diff: string; status: string }): string {
+// reply: the author's last reply, given when the task is read-only, since that reply is its work.
+export function reviewPrompt(input: { title: string; request: string; summary: string | null; diff: string; status: string; reply?: string | null }): string {
+  // A read-only author cannot commit anything, so asking it for files sends it into a retry loop.
+  const readOnly =
+    input.reply === undefined
+      ? []
+      : [
+          "This task is read-only: its author cannot change files, and its deliverable is the reply below, not a commit.",
+          "Do not ask for files to be written or committed; judge the reply itself.",
+          "",
+          "Author's last reply:",
+          (input.reply ?? "(none)").slice(0, 12000),
+          "",
+        ];
   return [
     "Review the work another agent did on the task below. You cannot edit files: read the changes, the relevant design documents and code,",
     "and run read-only checks if they help. Judge whether the work does what was asked, correctly and safely.",
@@ -103,6 +116,7 @@ export function reviewPrompt(input: { title: string; request: string; summary: s
     "",
     `Author's summary of the step: ${input.summary ?? "(none given)"}`,
     "",
+    ...readOnly,
     "Changed files (git status --short):",
     input.status || "(none)",
     "",
