@@ -379,6 +379,21 @@ describe("task stages", () => {
     expect(app.store.getTask(task.id)).toMatchObject({ stage: "needs_review", autoContinues: 1 });
   });
 
+  it("stops resuming a partial step after an automatic continue that changed nothing", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 5, startNextWhenIdle: true });
+    const task = await newTask(app, projectId, { roleId: qa.id, message: "save the report [step-blocked]" });
+    await waitFor(() => app.store.getTask(task.id)!.autoContinues === 5);
+    expect(app.store.listRuns(task.id)).toHaveLength(2);
+    expect(app.store.getTask(task.id)).toMatchObject({ stage: "in_progress", stepState: "partial", status: "idle" });
+    const notices = app.runner.readEvents(app.store.listRuns(task.id)[1]!.id).map((e) => e.event);
+    expect(notices).toContainEqual(expect.objectContaining({ kind: "notice", text: expect.stringMatching(/changed nothing/) }));
+
+    // The owner's reply starts counting again.
+    await api(app, "POST", `/api/tasks/${task.id}/messages`, { text: "Try once more [step-blocked]" });
+    await waitFor(() => app.store.listRuns(task.id).length === 4 && app.store.getTask(task.id)!.autoContinues === 5);
+  });
+
   it("maps the legacy done flag to approve and close", async () => {
     const { app, projectId, qa } = await roleProject();
     const task = await newTask(app, projectId, { roleId: qa.id, message: "check" });

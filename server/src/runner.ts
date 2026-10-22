@@ -796,10 +796,22 @@ export class Runner {
       if (this.isProjectBusy(project.id) || this.deliveryPending.has(project.id) || this.store.deliveryPaused(project.id)) continue;
       for (const task of this.store.stalledTasks(project.id)) {
         if (task.autoContinues >= project.autoContinueSteps || this.budgetReason(task)) continue;
+        const checkpoint = this.store.getWorkspace(task.id)?.checkpointCommit ?? null;
+        const last = this.store.getStateJson<{ runId: string; checkpoint: string | null }>(`auto-continue.${task.id}`);
+        // The last automatic continue ended unfinished again without changing any file: the agent is
+        // blocked by something a resume cannot change (a read-only permission, say), so stop retrying.
+        if (last && last.runId === this.store.listRuns(task.id).at(-1)?.id && last.checkpoint === checkpoint) {
+          this.store.setStateJson(`auto-continue.${task.id}`, null);
+          this.publishTask(this.store.updateTask(task.id, { autoContinues: project.autoContinueSteps }));
+          this.note(task.id, "warn", "The automatic continue changed nothing and the step is still unfinished, so it is not resumed again. Reply to continue.");
+          this.bus.publish({ type: "inbox_changed" });
+          continue;
+        }
         tryStart(task, () => {
           this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
           this.note(task.id, "info", `Resuming the unfinished step automatically (${task.autoContinues + 1} of ${project.autoContinueSteps}).`);
-          this.send(task.id, task.nextStep ? `Continue the unfinished step: ${task.nextStep}` : "Continue the unfinished step.", true);
+          const { run } = this.send(task.id, task.nextStep ? `Continue the unfinished step: ${task.nextStep}` : "Continue the unfinished step.", true);
+          this.store.setStateJson(`auto-continue.${task.id}`, { runId: run.id, checkpoint });
         });
       }
       for (const task of this.store.backlogTasks(project.id)) tryStart(task, () => this.stageAction(task.id, { action: "start" }));
@@ -929,7 +941,10 @@ export class Runner {
     const task = this.requireIdleTask(taskId);
     check(task);
     const request = this.store.listMessages(task.id).find((m) => m.role === "user")?.text ?? task.title;
-    const prompt = reviewPrompt({ title: task.title, request, summary: task.stepSummary, ...changes });
+    const readOnly = !task.canEdit || !this.store.getRole(task.roleId!)?.canEdit;
+    const work = this.store.listRuns(task.id).findLast((r) => r.purpose === "work");
+    const reply = readOnly ? (this.store.listMessages(task.id).findLast((m) => m.runId === work?.id && m.role === "assistant")?.text ?? null) : undefined;
+    const prompt = reviewPrompt({ title: task.title, request, summary: task.stepSummary, ...changes, reply });
     const message = this.store.addMessage({ taskId, role: "user", text: `Review requested from ${reviewer.name}.`, runId: null });
     this.enqueue(task, message, prompt, "review", reviewer.id);
     return this.store.getTask(taskId)!;

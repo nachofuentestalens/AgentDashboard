@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { Department, Role, Task } from "@ad/shared";
-import { roleSystemPrompt, studioContext } from "../src/prompts.ts";
+import { reviewPrompt, roleSystemPrompt, studioContext } from "../src/prompts.ts";
 
 const base = {
   departments: [],
@@ -27,4 +27,12 @@ it("tells hands-off agents to decide routine questions themselves", () => {
   const handsOff = roleSystemPrompt({ ...input, handsOff: true });
   expect(handsOff).toContain("## Hands-off delivery");
   expect(handsOff).toContain("task block instead of a proposal");
+});
+
+it("gives the reviewer a read-only task's reply as its deliverable instead of asking for files", () => {
+  const input = { title: "Director daily review", request: "Return the report in your reply.", summary: "Report written.", diff: "", status: "" };
+  expect(reviewPrompt(input)).not.toContain("This task is read-only");
+  const prompt = reviewPrompt({ ...input, reply: "**Director daily review** NOT PLAYED." });
+  expect(prompt).toContain("its deliverable is the reply below, not a commit");
+  expect(prompt).toContain("**Director daily review** NOT PLAYED.");
 });

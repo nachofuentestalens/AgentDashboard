@@ -5,7 +5,7 @@
 // result, [crash] exits without a result, [slow] keeps streaming for a long time (to test Stop).
 // An inbox steward prompt ("Item key:" lines) gets one decision block per item.
 // Studio scenarios end the reply with blocks: [proposal:design/x.md], [task:Role Name:7],
-// [emergency:Role Name], [question], [badblock], [plan], [step-done|complete|partial], and in review runs
+// [emergency:Role Name], [question], [badblock], [plan], [step-done|complete|partial], [step-blocked], and in review runs
 // [review-pass|changes]. [cost:1.5] reports that cost; [args] and
 // [sysprompt] echo the arguments and the role's system prompt file.
 
@@ -183,6 +183,9 @@ for (const state of ["done", "complete", "partial"]) {
   if (prompt.includes(`[step-${state}]`))
     blocks.push(fence("step", JSON.stringify({ state, summary: `Fake step ${state}.`, next: state === "complete" ? null : "Tune the dash cooldown." })));
 }
+// A step blocked by something a resume cannot change: every continuation is partial again.
+if (prompt.includes("[step-blocked]"))
+  blocks.push(fence("step", JSON.stringify({ state: "partial", summary: "Saving is blocked.", next: "Retry the save [step-blocked]." })));
 // The inbox steward's triage: one decision per item, chosen by the item's kind.
 for (const [, item, kind, actions] of prompt.matchAll(/^Item key: ((\w+):\S+)\r?\nKind: \w+; actions: (.*)$/gm)) {
   const decision = {
