@@ -360,7 +360,7 @@ export class Store {
     }));
   }
 
-  createCompanyAssignment(projectId: string, day: string, kind: CompanyAssignmentKind, roleId: string, prompt: string): Task | null {
+  createCompanyAssignment(projectId: string, day: string, kind: CompanyAssignmentKind, roleId: string, prompt: string, canEdit = false): Task | null {
     return transaction(this.db, () => {
       if (this.db.prepare("SELECT 1 FROM company_assignments WHERE project_id = ? AND day = ? AND kind = ?").get(projectId, day, kind)) return null;
       // A delayed or unanswered session must not accumulate another daily copy.
@@ -377,7 +377,7 @@ export class Store {
         projectId,
         roleId,
         title: `${kind === "director" ? "Director daily review" : "QA daily playtest"} — ${day}`,
-        canEdit: false,
+        canEdit,
         model: null,
         effort: null,
         priority: kind === "director" ? 7 : 6,
