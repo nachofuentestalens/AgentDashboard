@@ -17,7 +17,7 @@ import {
   type ProviderState,
 } from "../src/coordinator.ts";
 import { plan, type QueuedRun, type SchedulerState } from "../src/scheduler.ts";
-import { parseClaudeUsage, readCodexUsage } from "../src/usage.ts";
+import { codexUsage, parseClaudeUsage, parseCodexUsage, readCodexUsage } from "../src/usage.ts";
 import { api, newProject, newTask, runFinished, testApp } from "./helpers.ts";
 
 const HOUR = 3_600_000;
@@ -496,6 +496,49 @@ describe("usage API", () => {
       expect(() => readCodexUsage(path.join(root, "missing"))).toThrow(/No Codex sessions/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads Codex limits live, falling back to rollouts when the endpoint is unavailable", async () => {
+    const body = {
+      rate_limit: {
+        primary_window: { used_percent: 0, limit_window_seconds: 18000, reset_at: 1792808406 },
+        secondary_window: { used_percent: 12.5, limit_window_seconds: 604800, reset_at: 1793395206 },
+      },
+    };
+    const live = [
+      { window: "session", usedPercent: 0, resetsAt: new Date(1792808406 * 1000).toISOString() },
+      { window: "weekly", usedPercent: 12.5, resetsAt: new Date(1793395206 * 1000).toISOString() },
+    ];
+    expect(parseCodexUsage(body)).toEqual(live);
+    expect(parseCodexUsage({ detail: "nope" })).toEqual([]);
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-home-"));
+    const previous = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    try {
+      const sessions = path.join(home, "sessions");
+      const dir = path.join(sessions, "2026", "10", "17");
+      fs.mkdirSync(dir, { recursive: true });
+      const limits = { limit_id: "codex", secondary: { used_percent: 49, window_minutes: 10080, resets_at: 1793295347 } };
+      fs.writeFileSync(path.join(dir, "rollout-a.jsonl"), JSON.stringify({ timestamp: "2026-10-17T10:00:00Z", payload: { rate_limits: limits } }) + "\n");
+      fs.writeFileSync(path.join(home, "auth.json"), JSON.stringify({ tokens: { access_token: "tok", account_id: "acct" } }));
+      const seen: Headers[] = [];
+      const ok = (async (_url: string, init: RequestInit) => {
+        seen.push(new Headers(init.headers));
+        return new Response(JSON.stringify(body), { status: 200 });
+      }) as unknown as typeof fetch;
+      expect(await codexUsage(ok, sessions)).toEqual(live);
+      expect(seen[0]!.get("authorization")).toBe("Bearer tok");
+      expect(seen[0]!.get("chatgpt-account-id")).toBe("acct");
+
+      const denied = (async () => new Response("{}", { status: 401 })) as unknown as typeof fetch;
+      expect(await codexUsage(denied, sessions)).toMatchObject([{ window: "weekly", usedPercent: 49, observedAt: "2026-10-17T10:00:00.000Z" }]);
+      await expect(codexUsage(denied, path.join(home, "missing"))).rejects.toThrow(/No Codex sessions.*HTTP 401/);
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previous;
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 });
