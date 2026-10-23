@@ -26,6 +26,13 @@ export default defineConfig({
     command: "pnpm --filter @ad/server start",
     url: `http://127.0.0.1:${port}/api/health`,
     reuseExistingServer: false,
-    env: { AGENT_DASHBOARD_PORT: String(port), AGENT_DASHBOARD_DATA: dataDir, AGENT_DASHBOARD_FAKE_CLAUDE: "1", FAKE_CLAUDE_DELAY: "15" },
+    // The restart test must not pull this checkout.
+    env: {
+      AGENT_DASHBOARD_UPDATE_ON_RESTART: "0",
+      AGENT_DASHBOARD_PORT: String(port),
+      AGENT_DASHBOARD_DATA: dataDir,
+      AGENT_DASHBOARD_FAKE_CLAUDE: "1",
+      FAKE_CLAUDE_DELAY: "15",
+    },
   },
 });
