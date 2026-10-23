@@ -39,7 +39,10 @@ export function ServerRestart() {
                 ? "Restarting server…"
                 : "Preparing agents for restart…"}
           </p>
-          <p className="text-ink-400">New work is held. Current turns finish, then agents save handoffs. Sessions and queued work survive restart.</p>
+          <p className="text-ink-400">
+            New work is held. Current turns finish, then agents save handoffs. Sessions and queued work survive restart, which first pulls the latest Git
+            version.
+          </p>
           <button className="text-accent" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
             {state.participants.filter((p) => p.state === "ready").length} / {state.participants.length} agents ready
           </button>
