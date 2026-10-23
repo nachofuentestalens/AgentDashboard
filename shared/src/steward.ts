@@ -34,14 +34,18 @@ export function shortHash(text: string): string {
   return (h >>> 0).toString(36);
 }
 
+// Wait reasons carry live numbers (usage %, "resets in 37m") that change every minute; the key
+// follows the reason's wording only, so the same wait is not announced or triaged again.
+const reasonShape = (reason: string | null) => (reason ?? "").replace(/\d+(?:\.\d+)?/g, "#");
+
 export const inboxKeys = {
   question: (task: Task) => `question:${task.id}:${shortHash(task.question ?? "")}`,
   review: (task: Task) => `review:${task.id}:${task.stageChangedAt ?? ""}`,
   changes: (task: Task) => `changes:${task.id}:${task.stageChangedAt ?? ""}`,
   proposal: (p: Proposal) => `proposal:${p.id}`,
   handoff: (h: Handoff) => `handoff:${h.id}`,
-  held: (run: Run) => `held:${run.id}:${shortHash(run.waitReason ?? "")}`,
-  blocked: (run: Run) => `blocked:${run.id}:${shortHash(run.waitReason ?? "")}`,
+  held: (run: Run) => `held:${run.id}:${shortHash(reasonShape(run.waitReason))}`,
+  blocked: (run: Run) => `blocked:${run.id}:${shortHash(reasonShape(run.waitReason))}`,
 };
 
 export type StewardItemStatus = "triaging" | "handled" | "escalated";

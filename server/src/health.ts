@@ -28,6 +28,8 @@ export interface HealthConcern {
   runId: string | null;
   // failing: failed runs in a row at the end of the task's history.
   failures?: number;
+  // stall: every queued run waits on a coordinator quota hold, which the provider alert already explains.
+  quotaHold?: boolean;
 }
 
 export interface Health {
@@ -87,6 +89,7 @@ export function projectHealth({ now, tasks, runningElsewhere }: HealthInput): He
       ].join("\n"),
       taskId: oldest.taskId,
       runId: oldest.id,
+      quotaHold: queued.every((r) => r.waitReason?.startsWith("Coordinator:")),
     });
   }
 
