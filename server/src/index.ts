@@ -17,6 +17,8 @@ const dataDir = resolveDataDir();
 const webDir = fileURLToPath(new URL("../../web/dist", import.meta.url));
 
 const { providerUsageFetcher } = await import("./usage.ts");
+const { telegramConfig, telegramSender } = await import("./notify.ts");
+const telegram = telegramConfig(process.env, dataDir);
 const app = await buildApp({
   restart: process.env.AGENT_DASHBOARD_SUPERVISED ? () => void shutdown(75) : undefined,
   dataDir,
@@ -25,6 +27,8 @@ const app = await buildApp({
   // Demo mode and e2e run the fake agent and must not read the owner's real usage.
   usage: process.env.AGENT_DASHBOARD_FAKE_CLAUDE ? undefined : providerUsageFetcher(),
   trustedHosts: process.env.AGENT_DASHBOARD_TRUSTED_HOSTS?.split(","),
+  // Demo mode must not message the owner about the fake agent.
+  notify: telegram && !process.env.AGENT_DASHBOARD_FAKE_CLAUDE ? telegramSender(telegram) : undefined,
 });
 
 // Loopback only, on purpose: the API starts processes and has no authentication.
