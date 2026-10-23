@@ -51,8 +51,12 @@ export function Layout() {
                   `block truncate rounded-md px-2 py-1.5 text-sm ${isActive || p.id === activeProjectId ? "bg-ink-800 text-ink-100" : "text-ink-300 hover:bg-ink-850 hover:text-ink-100"}`
                 }
               >
-                {p.automationPaused && (
-                  <span className="mr-1 text-ink-400" aria-label="paused" title="Paused">
+                {p.pausedProviders.length > 0 && (
+                  <span
+                    className={`mr-1 ${p.automationPaused ? "text-ink-400" : "text-ink-500"}`}
+                    aria-label="paused"
+                    title={p.automationPaused ? "Paused" : `Paused: ${p.pausedProviders.join(", ")}`}
+                  >
                     ⏸
                   </span>
                 )}

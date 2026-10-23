@@ -24,7 +24,7 @@ describe("existing version 5 databases", () => {
         db.exec("PRAGMA user_version = 5");
         migrate(db);
         migrate(db);
-        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 14 });
+        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 15 });
       } finally {
         db.close();
       }
@@ -87,6 +87,26 @@ it("turns the inbox steward on for projects that already use hands-off delivery"
     const steward = (id: string) => db.prepare("SELECT inbox_steward FROM projects WHERE id = ?").get(id);
     expect(steward(handsOff)).toEqual({ inbox_steward: 1 });
     expect(steward(owner)).toEqual({ inbox_steward: 0 });
+  } finally {
+    db.close();
+  }
+});
+
+it("carries a paused project over as every provider paused", async () => {
+  const dataDir = tempDir("ad-paused-providers-");
+  const app = await testApp(dataDir);
+  const paused = await newProject(app);
+  const running = await newProject(app);
+  await app.close();
+  const db = openDb(path.join(dataDir, "dashboard.db"));
+  try {
+    db.exec(`ALTER TABLE projects DROP COLUMN paused_providers; PRAGMA user_version = 14;`);
+    db.prepare("UPDATE projects SET automation_paused = 1 WHERE id = ?").run(paused);
+    migrate(db);
+    const providers = (id: string) =>
+      (db.prepare("SELECT paused_providers FROM projects WHERE id = ?").get(id) as { paused_providers: string }).paused_providers;
+    expect(JSON.parse(providers(paused))).toEqual(["claude", "codex"]);
+    expect(JSON.parse(providers(running))).toEqual([]);
   } finally {
     db.close();
   }

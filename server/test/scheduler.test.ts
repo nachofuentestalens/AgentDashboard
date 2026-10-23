@@ -103,10 +103,23 @@ describe("scheduler", () => {
     {
       name: "a paused project starts only forced runs, not even emergencies; other projects go on",
       s: state({
-        pausedProjects: new Set(["p"]),
+        pausedProviders: new Map([["p", new Set(["claude", "codex"] as const)]]),
         queued: [q("normal"), q("forced", { forced: true }), q("fire", { emergency: true }), q("other", { projectId: "p2" })],
       }),
       start: ["other", "forced"],
+    },
+    {
+      name: "a provider paused in a project holds only that provider's runs there",
+      s: state({
+        pausedProviders: new Map([["p", new Set(["codex"] as const)]]),
+        queued: [
+          q("codex", { provider: "codex" }),
+          q("claude", { provider: "claude" }),
+          q("forcedcodex", { provider: "codex", forced: true }),
+          q("othercodex", { provider: "codex", projectId: "p2" }),
+        ],
+      }),
+      start: ["othercodex", "forcedcodex", "claude"],
     },
     {
       name: "a department over budget waits; others go on",
@@ -148,7 +161,9 @@ describe("scheduler", () => {
     expect(result.start).toEqual([]);
     expect(result.waiting.get("budget")).toMatch(/Engineering reached its daily budget \(\$2\.00 of \$1\.00\)/);
     expect(result.waiting.get("nobody")).toMatch(/No Designer agent/);
-    expect(plan(state({ pausedProjects: new Set(["p"]), queued: [q("held")] })).waiting.get("held")).toMatch(/project is paused/);
+    const paused = (providers: ("claude" | "codex")[]) => new Map([["p", new Set(providers)]]);
+    expect(plan(state({ pausedProviders: paused(["claude", "codex"]), queued: [q("held")] })).waiting.get("held")).toMatch(/project is paused/);
+    expect(plan(state({ pausedProviders: paused(["claude"]), queued: [q("held")] })).waiting.get("held")).toMatch(/^Claude work in this project is paused/);
   });
 
   it("assigns distinct free agents and charges estimates as it goes", () => {

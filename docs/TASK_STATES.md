@@ -258,6 +258,12 @@ and automation continue. A step or review that ended while paused (a "Run anyway
 its automatic review, findings round or continue on the first scheduling pass after resuming (`catchUpAutomation` in `runner.ts`),
 so no task waits in `needs_review` for a review that was never asked for.
 
+The owner pauses each provider separately (`pausedProviders`, the Pause Claude / Pause Codex buttons). With only one paused, the
+project's queued role runs on that provider wait (with the same "Run anyway" escape), automatic starts and continues do not pick it,
+and the coordinator neither counts, starts nor resumes that provider's work there; the other provider's work and all automation go
+on. Pausing every provider is the project pause above (`automationPaused` is true exactly then; the API still accepts it to pause or
+resume all of them at once).
+
 ## Rollout
 
 1. `stages.ts` with a table test; migration and shared types; set `stage` in runner and routes; remove `done` from `TaskStatus`; the actions endpoint. The UI shows a stage pill only.

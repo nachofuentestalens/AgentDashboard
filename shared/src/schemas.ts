@@ -54,7 +54,9 @@ export const updateProjectBody = z.object({
   autoContinueSteps: z.number().int().min(0).max(20).optional(),
   startNextWhenIdle: z.boolean().optional(),
   autoApprove: z.boolean().optional(),
+  // Pauses or resumes every provider at once; pausedProviders picks them one by one.
   automationPaused: z.boolean().optional(),
+  pausedProviders: z.array(provider).max(PROVIDERS.length).optional(),
   inboxSteward: z.boolean().optional(),
 });
 

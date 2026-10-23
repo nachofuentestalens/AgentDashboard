@@ -11,6 +11,7 @@ import {
   parseClaudeLine,
   parseReplyBlocks,
   PROVIDERS,
+  providerPaused,
   MODEL_PRESETS,
   type ModelOption,
   type ModelHold,
@@ -19,6 +20,7 @@ import {
   type Choice,
   type Effort,
   type Message,
+  type Project,
   type Provider,
   type Role,
   type Run,
@@ -771,13 +773,16 @@ export class Runner {
     for (const a of this.store.listAgents()) if (!a.paused) add(agents, a.roleId);
 
     // Runs the start when the task fits, and counts it against the role, provider and writer slot.
-    const tryStart = (task: Task, begin: () => void) => {
+    // A provider the owner paused in the project has no slot for its work.
+    const tryStart = (project: Project, task: Task, begin: () => void) => {
       if (!task.roleId || (roleLoad.get(task.roleId) ?? 0) >= (agents.get(task.roleId) ?? 0) || this.store.dependencyBlocker(task)) return;
+      const slots = { ...limits };
+      for (const p of project.pausedProviders) slots[p] = 0;
       const current = this.taskProvider(task);
       const provider = task.emergency
         ? current
-        : (this.coordinator?.selectAutomaticProvider?.(current, this.taskEffort(task), providerLoad, limits, task.priority) ?? current);
-      if ((providerLoad.get(provider) ?? 0) >= limits[provider]) return;
+        : (this.coordinator?.selectAutomaticProvider?.(current, this.taskEffort(task), providerLoad, slots, task.priority) ?? current);
+      if ((providerLoad.get(provider) ?? 0) >= slots[provider]) return;
       const role = this.store.getRole(task.roleId);
       const edits = !!role?.canEdit && task.canEdit;
       if (edits && writers.has(role!.departmentId)) return;
@@ -810,14 +815,14 @@ export class Runner {
           this.bus.publish({ type: "inbox_changed" });
           continue;
         }
-        tryStart(task, () => {
+        tryStart(project, task, () => {
           this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
           this.note(task.id, "info", `Resuming the unfinished step automatically (${task.autoContinues + 1} of ${project.autoContinueSteps}).`);
           const { run } = this.send(task.id, task.nextStep ? `Continue the unfinished step: ${task.nextStep}` : "Continue the unfinished step.", true);
           this.store.setStateJson(`auto-continue.${task.id}`, { runId: run.id, checkpoint });
         });
       }
-      for (const task of this.store.backlogTasks(project.id)) tryStart(task, () => this.stageAction(task.id, { action: "start" }));
+      for (const task of this.store.backlogTasks(project.id)) tryStart(project, task, () => this.stageAction(task.id, { action: "start" }));
     }
   }
 
@@ -1087,11 +1092,12 @@ export class Runner {
     const readiness = new Map<string, string | null>();
     for (const run of this.store.runsWithStatus("queued")) {
       const task = this.store.getTask(run.taskId);
-      if (task && this.modelHeld(this.choice(this.actorTask(task, run)).provider, this.choice(this.actorTask(task, run)).model)) continue;
+      const choice = task && this.choice(this.actorTask(task, run));
+      if (choice && this.modelHeld(choice.provider, choice.model)) continue;
       const project = task && this.store.getProject(task.projectId);
       if (task && project && run.purpose === "work") {
         // The scheduler holds it for the pause; its Git checks can wait until the project resumes.
-        if (project.automationPaused && !run.forced) {
+        if (choice && providerPaused(project, choice.provider) && !run.forced) {
           readiness.set(run.id, null);
           continue;
         }
@@ -1199,11 +1205,11 @@ export class Runner {
       freeAgents,
       staffedRoles,
       frozenProjects: new Set(this.store.openEmergencies().map((t) => t.projectId)),
-      pausedProjects: new Set(
+      pausedProviders: new Map(
         this.store
           .listProjects()
-          .filter((p) => p.automationPaused)
-          .map((p) => p.id),
+          .filter((p) => p.pausedProviders.length > 0)
+          .map((p) => [p.id, new Set(p.pausedProviders)]),
       ),
       active: [...this.active.values()].map((a) => ({ runId: a.runId, departmentId: a.departmentId, canEdit: a.canEdit, provider: a.provider })),
       queued,

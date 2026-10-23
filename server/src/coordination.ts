@@ -5,6 +5,7 @@ import {
   coordinatorConfigBody,
   DEFAULT_COORDINATOR_CONFIG,
   PROVIDERS,
+  providerPaused,
   quotaReadingBody,
   type CoordinatorAction,
   type CoordinatorConfig,
@@ -202,7 +203,8 @@ export class Coordinator implements RunCoordinator {
       if (dependencyBlockedQueue(this.store, run)) continue;
       const t = ref(run.taskId);
       // Work the owner paused waits for them, not for a provider.
-      if (!t || (!run.forced && this.store.getProject(t.task.projectId)?.automationPaused)) continue;
+      const project = t && this.store.getProject(t.task.projectId);
+      if (!t || !project || (!run.forced && providerPaused(project, this.runner.runProvider(run)))) continue;
       queued.push({
         ...t.ref,
         provider: this.runner.runProvider(run),
@@ -226,7 +228,8 @@ export class Coordinator implements RunCoordinator {
         continue;
       }
       const idle = !this.runner.isTaskRunning(taskId) && t.task.status !== "queued";
-      const projectPaused = !!this.store.getProject(t.task.projectId)?.automationPaused;
+      const project = this.store.getProject(t.task.projectId);
+      const projectPaused = !project || providerPaused(project, t.ref.provider);
       paused.push({ ...t.ref, runId, resumable: idle && latest.status === "stopped" && !projectPaused });
     }
     if (pruned) this.store.setStateJson(PAUSED_KEY, pausedState);
@@ -245,6 +248,7 @@ export class Coordinator implements RunCoordinator {
           t.roleId &&
           staffed.has(t.roleId) &&
           !t.emergency &&
+          !providerPaused(this.store.getProject(t.projectId)!, this.runner.taskProvider(t)) &&
           !this.store.dependencyBlocker(t) &&
           !this.store.deliveryPaused(t.projectId) &&
           !this.runner.isProjectBusy(t.projectId),

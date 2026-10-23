@@ -10,6 +10,9 @@ export const PROVIDERS = [
 export type Provider = (typeof PROVIDERS)[number]["id"];
 export const DEFAULT_PROVIDER: Provider = "claude";
 export const isProvider = (v: unknown): v is Provider => v === "claude" || v === "codex";
+export const providerLabel = (provider: Provider) => PROVIDERS.find((p) => p.id === provider)!.label;
+// Whether the owner paused this provider's role work in the project.
+export const providerPaused = (project: { pausedProviders: Provider[] }, provider: Provider) => project.pausedProviders.includes(provider);
 
 // Every effort any provider knows; each provider accepts a range of them (PROVIDER_EFFORTS).
 export const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -105,8 +108,10 @@ export interface Project {
   startNextWhenIdle: boolean;
   // A passed agent review approves the task and integrates it into the baseline without the owner.
   autoApprove: boolean;
-  // The owner paused the project's agent work: no role task run starts and no automation acts
-  // (plain chats and "run anyway" still do). Running agents finish their current turn.
+  // Providers whose role task runs the owner paused in this project (plain chats and "run anyway"
+  // still start). Running agents finish their current turn.
+  pausedProviders: Provider[];
+  // Every provider is paused: no role task run starts and no automation acts.
   automationPaused: boolean;
   // The inbox steward triages this project's inbox first and escalates only what it cannot decide.
   inboxSteward: boolean;
