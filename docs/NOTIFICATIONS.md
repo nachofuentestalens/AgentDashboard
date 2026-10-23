@@ -8,12 +8,18 @@ noticed away from the desk. It is off unless configured. Code: `server/src/notif
 Checked every minute, for every project whose automation is not paused:
 
 - a provider out of quota (coordinator level `reserve` or `exhausted`), and a ✅ message when it can
-  work again; `conserve` is normal pacing and is not reported;
+  work again; `conserve` is normal pacing and is not reported, and moving between `reserve` and
+  `exhausted` is the same wait;
 - project health concerns from `server/src/health.ts`: a stalled queue (resent as the stall doubles:
-  15, 30, 60 min…), a task that keeps failing, a task idle in progress with nothing to move it;
+  15, 30, 60 min…; not when every queued run waits on a coordinator quota hold, which the provider
+  alert already explains), a task that keeps failing, a task idle in progress with nothing to move it;
 - steward escalations (inbox alerts) and agents' questions waiting for the owner.
 
-Each problem is sent once while it lasts; new problems found in one check go out as one message.
+Each problem is sent once while it lasts; new problems found in one check go out as one message. A
+problem that goes away is remembered for 15 minutes, so one that flaps (usage hovering at the
+reserve) is not resent, and a ✅ recovery is only sent once it has stayed away that long. Inbox keys
+for held and blocked runs ignore the numbers in wait reasons ("usage 96%", "resets in 37m"), so the
+desktop alerts and the steward do not treat each minute's update as a new item.
 What was sent is kept in `<data dir>/notified.json`, so a restart does not resend open problems. A
 failed send is retried on the next check; `GET /api/notifications` shows the last error.
 

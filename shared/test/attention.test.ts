@@ -36,6 +36,19 @@ describe("attention", () => {
     expect(newAttention(new Set(first.map((i) => i.key)), again)).toHaveLength(1);
   });
 
+  it("does not announce a held run again when only the numbers in its wait reason change", () => {
+    const held = (waitReason: string) =>
+      attentionItems(inbox({ held: [{ task: task("a"), run: { id: "r1", taskId: "a", waitReason } as Run }] as Inbox["held"] }));
+    const before = held("Coordinator: Claude: Session usage 96% reached the 95% reserve kept for you; agents wait; resets in 37m.");
+    expect(
+      newAttention(
+        new Set(before.map((i) => i.key)),
+        held("Coordinator: Claude: Session usage 97% reached the 95% reserve kept for you; agents wait; resets in 36m."),
+      ),
+    ).toEqual([]);
+    expect(newAttention(new Set(before.map((i) => i.key)), held("Coordinator: Claude: Weekly limit reached; resets in 2d 3h."))).toHaveLength(1);
+  });
+
   it("announces finished and failed work runs, not stopped or review runs", () => {
     const run = (extra: Partial<Run>) => ({ id: "r1", taskId: "a", purpose: "work", status: "succeeded", ...extra }) as Run;
     expect(finishedRunAlert(run({}), "Chat")).toEqual({ key: "finished:r1", text: '"Chat" finished', url: "/tasks/a" });

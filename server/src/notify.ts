@@ -11,6 +11,9 @@ import type { Store } from "./store.ts";
 // See docs/NOTIFICATIONS.md. The rules are pure; the service polls and remembers what it sent.
 
 export const NOTIFY_INTERVAL_MS = 60_000;
+// A problem that goes away is remembered this long, so one that flaps (usage hovering at the reserve,
+// a queue that briefly moves) is not resent, and its recovery is only sent once it stays away.
+export const SETTLE_MS = 15 * 60_000;
 const MAX_MESSAGE = 3800;
 const PROVIDER_NAME = { claude: "Claude", codex: "Codex" } as const;
 
@@ -44,10 +47,13 @@ export function ownerAlerts({ projects, providers, inbox }: AlertInput): OwnerAl
   for (const p of providers) {
     if (p.level !== "reserve" && p.level !== "exhausted") continue;
     const name = PROVIDER_NAME[p.provider];
-    out.push({ key: `provider:${p.provider}:${p.level}`, text: `${name} agents are waiting: ${p.reason}`, recovery: `${name} agents can work again.` });
+    // One key for reserve and exhausted: running out after reaching the reserve is the same wait.
+    out.push({ key: `provider:${p.provider}`, text: `${name} agents are waiting: ${p.reason}`, recovery: `${name} agents can work again.` });
   }
   for (const { project, health } of projects) {
     for (const c of health.concerns) {
+      // A queue held by the coordinator for quota is expected; the provider alert already says so.
+      if (c.quotaHold) continue;
       out.push({ key: `health:${project.id}:${c.key}`, text: [`${project.name}: ${c.title}`, ...reasonLines(c.detail)].join("\n") });
     }
   }
@@ -58,11 +64,23 @@ export function ownerAlerts({ projects, providers, inbox }: AlertInput): OwnerAl
   return out;
 }
 
-// What to send now: alerts not sent before, and recoveries of sent alerts that went away.
-export function alertChanges(sent: ReadonlyMap<string, string | null>, alerts: OwnerAlert[]): { messages: string[]; next: Map<string, string | null> } {
-  const next = new Map(alerts.map((a) => [a.key, a.recovery ?? null]));
+export interface SentAlert {
+  recovery: string | null;
+  // When the alert stopped showing; it is forgotten (and its recovery sent) after SETTLE_MS.
+  goneAt?: number;
+}
+
+// What to send now: alerts not sent before, and recoveries of sent alerts that stayed away.
+export function alertChanges(sent: ReadonlyMap<string, SentAlert>, alerts: OwnerAlert[], now: number): { messages: string[]; next: Map<string, SentAlert> } {
+  const next = new Map<string, SentAlert>(alerts.map((a) => [a.key, { recovery: a.recovery ?? null }]));
   const fresh = alerts.filter((a) => !sent.has(a.key)).map((a) => `⚠️ ${a.text}`);
-  const recovered = [...sent].flatMap(([key, recovery]) => (recovery && !next.has(key) ? [`✅ ${recovery}`] : []));
+  const recovered: string[] = [];
+  for (const [key, entry] of sent) {
+    if (next.has(key)) continue;
+    const goneAt = entry.goneAt ?? now;
+    if (now - goneAt < SETTLE_MS) next.set(key, { ...entry, goneAt });
+    else if (entry.recovery) recovered.push(`✅ ${entry.recovery}`);
+  }
   return { messages: [...fresh, ...recovered], next };
 }
 
@@ -183,7 +201,7 @@ export class Notifier {
     if (!send || this.checking) return;
     this.checking = true;
     try {
-      const { messages, next } = alertChanges(this.readSent(), this.alerts());
+      const { messages, next } = alertChanges(this.readSent(), this.alerts(), (this.deps.now ?? Date.now)());
       for (const text of batch(messages)) await send(text);
       // Saved only after sending, so a failed send is retried on the next check.
       this.writeSent(next);
@@ -196,16 +214,19 @@ export class Notifier {
   }
 
   // Kept on disk so a server restart does not resend every open problem.
-  private readSent(): Map<string, string | null> {
+  private readSent(): Map<string, SentAlert> {
     try {
-      const saved = JSON.parse(fs.readFileSync(this.file, "utf8")) as Record<string, string | null>;
-      return new Map(Object.entries(saved));
+      const saved = JSON.parse(fs.readFileSync(this.file, "utf8")) as Record<string, SentAlert | string | null>;
+      // Older files kept only the recovery text, and keyed providers by level.
+      return new Map(
+        Object.entries(saved).map(([key, v]) => [key.replace(/^(provider:\w+):\w+$/, "$1"), v !== null && typeof v === "object" ? v : { recovery: v }]),
+      );
     } catch {
       return new Map();
     }
   }
 
-  private writeSent(sent: Map<string, string | null>): void {
+  private writeSent(sent: Map<string, SentAlert>): void {
     fs.writeFileSync(this.file, JSON.stringify(Object.fromEntries(sent), null, 2));
   }
 }

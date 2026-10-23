@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Inbox, Project, ProviderQuotaView, Task } from "@ad/shared";
-import { alertChanges, batch, Notifier, ownerAlerts, telegramConfig, telegramSender, type NotifierDeps } from "../src/notify.ts";
+import { alertChanges, batch, Notifier, ownerAlerts, SETTLE_MS, telegramConfig, telegramSender, type NotifierDeps } from "../src/notify.ts";
 import type { Runner } from "../src/runner.ts";
 import type { Store } from "../src/store.ts";
 import { api, tempDir, testApp } from "./helpers.ts";
@@ -39,20 +39,38 @@ describe("owner alerts", () => {
       },
     });
     // A conserving provider still works, so only Codex is reported.
-    expect(alerts.map((a) => a.key)).toEqual(["provider:codex:exhausted", "health:p1:stall:r1:0", "alert:p1:k", expect.stringContaining("t2")]);
+    expect(alerts.map((a) => a.key)).toEqual(["provider:codex", "health:p1:stall:r1:0", "alert:p1:k", expect.stringContaining("t2")]);
     expect(alerts[0]!.recovery).toBe("Codex agents can work again.");
     expect(alerts[1]!.text).toBe("Banner & Bounty: Nothing has run for 15 min while 1 run waits\n- 1 × Coordinator: hold");
     expect(alerts[3]!.text).toContain("Which build?");
   });
 
-  it("sends each alert once and a recovery when a recoverable one ends", () => {
+  it("skips stalls caused by quota holds", () => {
+    const stall = { key: "stall:r1:0", kind: "stall" as const, title: "Nothing has run", detail: "", taskId: "t1", runId: "r1", quotaHold: true };
+    const alerts = ownerAlerts({ providers: [], projects: [{ project, health: { overview: "", concerns: [stall] } }], inbox: noInbox });
+    expect(alerts).toEqual([]);
+  });
+
+  it("sends each alert once and a recovery when a recoverable one stays away", () => {
     const exhausted = ownerAlerts({ providers: [provider("claude", "exhausted")], projects: [], inbox: noInbox });
-    const first = alertChanges(new Map(), exhausted);
+    const first = alertChanges(new Map(), exhausted, 0);
     expect(first.messages).toEqual(["⚠️ Claude agents are waiting: claude is exhausted"]);
-    expect(alertChanges(first.next, exhausted).messages).toEqual([]);
-    expect(alertChanges(first.next, []).messages).toEqual(["✅ Claude agents can work again."]);
-    // Other alerts just stop being remembered, so a recurrence is sent again.
-    expect(alertChanges(new Map([["health:p1:x", null]]), []).messages).toEqual([]);
+    expect(alertChanges(first.next, exhausted, 1).messages).toEqual([]);
+    // Moving between reserve and exhausted is the same wait.
+    const reserve = ownerAlerts({ providers: [provider("claude", "reserve")], projects: [], inbox: noInbox });
+    expect(alertChanges(first.next, reserve, 1).messages).toEqual([]);
+    // A flapping alert is neither recovered nor resent while it settles.
+    const gone = alertChanges(first.next, [], 1000);
+    expect(gone.messages).toEqual([]);
+    const back = alertChanges(gone.next, exhausted, 2000);
+    expect(back.messages).toEqual([]);
+    const goneAgain = alertChanges(back.next, [], 3000);
+    expect(alertChanges(goneAgain.next, [], 3000 + SETTLE_MS - 1).messages).toEqual([]);
+    const settled = alertChanges(goneAgain.next, [], 3000 + SETTLE_MS);
+    expect(settled.messages).toEqual(["✅ Claude agents can work again."]);
+    expect(settled.next.size).toBe(0);
+    // Other alerts are forgotten silently once settled, so a later recurrence is sent again.
+    expect(alertChanges(new Map([["health:p1:x", { recovery: null, goneAt: 0 }]]), [], SETTLE_MS)).toEqual({ messages: [], next: new Map() });
   });
 
   it("batches messages into as few Telegram messages as fit", () => {
@@ -97,10 +115,13 @@ describe("notifier", () => {
     providers: () => providers[0]!,
     dataDir,
     send,
+    now: () => clock,
   });
+  let clock = 0;
 
   it("remembers sent alerts across restarts and retries a failed send", async () => {
     const dataDir = tempDir("ad-notify-");
+    clock = 0;
     const sent: string[] = [];
     let fail = true;
     const providers = [[provider("claude", "reserve")]];
@@ -121,7 +142,18 @@ describe("notifier", () => {
     expect(sent).toHaveLength(1);
     providers[0] = [provider("claude", "ok")];
     await restarted.check();
+    expect(sent).toHaveLength(1);
+    clock += SETTLE_MS;
+    await restarted.check();
     expect(sent.at(-1)).toBe("✅ Claude agents can work again.");
+  });
+
+  it("reads the older notified.json format", async () => {
+    const dataDir = tempDir("ad-notify-");
+    fs.writeFileSync(path.join(dataDir, "notified.json"), JSON.stringify({ "provider:claude:reserve": "Claude agents can work again." }));
+    const sent: string[] = [];
+    await new Notifier(deps(dataDir, [[provider("claude", "exhausted")]], async (text) => void sent.push(text))).check();
+    expect(sent).toEqual([]);
   });
 
   let app: Awaited<ReturnType<typeof testApp>> | null = null;

@@ -75,6 +75,19 @@ describe("project health", () => {
     expect(stalled(STALL_MS)).toBe(stalled(STALL_MS * 2 - min));
     expect(stalled(STALL_MS * 2)).not.toBe(stalled(STALL_MS));
 
+    // A queue held only by the coordinator for quota is marked, so owner alerts can skip it.
+    const held = (...reasons: string[]) =>
+      projectHealth({
+        now: NOW,
+        tasks: reasons.map((waitReason, i) => ({
+          task: task(`q${i}`, { status: "queued" }),
+          runs: [run(`rq${i}`, `q${i}`, { status: "queued", startedAt: ago(STALL_MS), endedAt: null, waitReason })],
+        })),
+        runningElsewhere: 0,
+      }).concerns[0]!.quotaHold;
+    expect(held("Coordinator: Claude: Session usage 96% reached the 95% reserve kept for you; agents wait; resets in 37m.")).toBe(true);
+    expect(held("Coordinator: Claude: reserve", "Waiting for task b")).toBe(false);
+
     const failing = projectHealth({
       now: NOW,
       tasks: [
