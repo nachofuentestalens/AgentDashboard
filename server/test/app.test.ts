@@ -32,6 +32,16 @@ describe("request guard", () => {
     const ok = await app.fastify.inject({ method: "GET", url: "/api/projects", headers: { host: "localhost:5173", origin: "http://localhost:5173" } });
     expect(ok.statusCode).toBe(200);
   });
+
+  it("accepts only the exact trusted hosts it is given", async () => {
+    const app = await testApp(undefined, { trustedHosts: [" MyPC.tail1234.ts.net ", ""] });
+    apps.push(app);
+    const get = (host: string, origin?: string) => app.fastify.inject({ method: "GET", url: "/api/projects", headers: origin ? { host, origin } : { host } });
+    expect((await get("mypc.tail1234.ts.net", "https://mypc.tail1234.ts.net")).statusCode).toBe(200);
+    expect((await get("127.0.0.1:5190", "https://mypc.tail1234.ts.net")).statusCode).toBe(200);
+    expect((await get("evil.mypc.tail1234.ts.net")).statusCode).toBe(403);
+    expect((await get("mypc.tail1234.ts.net", "https://evil.example")).statusCode).toBe(403);
+  });
 });
 
 describe("projects", () => {
