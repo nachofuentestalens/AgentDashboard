@@ -117,6 +117,20 @@ describe("company daily assignments", () => {
     expect((await api(app, "GET", "/api/projects/missing/company")).status).toBe(404);
   });
 
+  it("lets a writable role save its daily report in its department folder", async () => {
+    const { app, id, advance } = await setup();
+    const director = app.store.findRoleByName(id, "Game Director")!;
+    app.store.updateRole(director.id, { canEdit: true });
+    advance("2026-10-20T09:00:00Z");
+    const tasks = app.store.listTasks(id);
+    const review = tasks.find((t) => t.roleId === director.id)!;
+    expect(review.canEdit).toBe(true);
+    expect(app.store.listMessages(review.id)[0]?.text).toContain("save the same report as `design/studio/reports/director-daily-2026-10-20.md`");
+    const qa = tasks.find((t) => t.roleId !== director.id)!;
+    expect(qa.canEdit).toBe(false);
+    expect(app.store.listMessages(qa.id)[0]?.text).toContain("do not modify the repository");
+  });
+
   it("requires evidence, labels unavailable play, and requests approval for spending or downtime", () => {
     for (const kind of ["director", "qa"] as const) {
       const prompt = dailyCompanyPrompt(config, kind, "2026-10-20");

@@ -8,7 +8,8 @@ import { HttpError, parse } from "./http.ts";
 
 const ROLES = { director: "Game Director", qa: "QA Player" } as const;
 
-export function dailyCompanyPrompt(config: CompanyConfig, kind: CompanyAssignmentKind, day: string): string {
+// Writable roles also keep the report in the repository; read-only ones only reply.
+export function dailyCompanyPrompt(config: CompanyConfig, kind: CompanyAssignmentKind, day: string, reportPath: string | null = null): string {
   return [
     `Company ${kind === "director" ? "director review" : "QA playtest"} for ${day} (UTC).`,
     `Game description: ${config.description}`,
@@ -23,10 +24,17 @@ export function dailyCompanyPrompt(config: CompanyConfig, kind: CompanyAssignmen
     kind === "director"
       ? "Write a daily director report: current playable state against the brief; strongest and weakest parts of the experience; top three next steps with acceptance criteria; milestone goals and exit criteria; needed designs; recommended staffing changes with reasons. Prioritize a playable core loop before speculative features. Recommendations are not executed staffing changes."
       : "Play as both a first-time and a returning player when possible. Write a QA report with scenario coverage, bugs, friction, fun observations, and ranked recommendations. Include what you could not test.",
-    "Return the full report in your reply so it is retained in this task. This assignment is observation and planning; do not modify the repository, deploy, purchase, subscribe, or interrupt a live service.",
+    reportPath
+      ? `Return the full report in your reply and save the same report as \`${reportPath}\` (UTF-8 Markdown). This assignment is observation and planning; change no other repository file, and do not deploy, purchase, subscribe, or interrupt a live service.`
+      : "Return the full report in your reply so it is retained in this task. This assignment is observation and planning; do not modify the repository, deploy, purchase, subscribe, or interrupt a live service.",
     "Make reasonable creative decisions from the brief. Escalate proposed spending or live-service downtime to the owner with a question block before taking action. Existing dashboard permission and delivery gates still apply.",
     "End with a step block using state complete. A completed report is not proof that the game was successfully played.",
   ].join("\n\n");
+}
+
+export function companyReportPath(folder: string | undefined, kind: CompanyAssignmentKind, day: string): string | null {
+  if (!folder) return null;
+  return `${folder === "." ? "" : `${folder}/`}reports/${kind}-daily-${day}.md`;
 }
 
 export class Company {
@@ -107,7 +115,9 @@ export class Company {
           for (const kind of ["qa", "director"] as const) {
             const role = this.store.findRoleByName(project.id, ROLES[kind]);
             if (!role) throw new Error(`Daily ${kind} assignment needs the ${ROLES[kind]} role. Save company settings to restore it.`);
-            const task = this.store.createCompanyAssignment(project.id, day, kind, role.id, dailyCompanyPrompt(config, kind, day));
+            const reportPath = role.canEdit ? companyReportPath(this.store.getDepartment(role.departmentId)?.folders[0], kind, day) : null;
+            const prompt = dailyCompanyPrompt(config, kind, day, reportPath);
+            const task = this.store.createCompanyAssignment(project.id, day, kind, role.id, prompt, !!reportPath);
             if (task) this.bus.publish({ type: "task_updated", task });
           }
         }
