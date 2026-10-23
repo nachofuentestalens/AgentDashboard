@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { App } from "../src/app.ts";
+import { npmCacheDir } from "../src/codex.ts";
 import { Workspaces } from "../src/workspaces.ts";
 import { api, git, gitRepo, newProject, newTask, runFinished, stepFinished, tempDir, testApp, waitFor } from "./helpers.ts";
 
@@ -56,6 +58,23 @@ describe("isolated task workspaces", () => {
     expect(input).not.toContain("owner-only.txt");
     expect(fs.existsSync(path.join(repo, "agent-work.txt"))).toBe(false);
   });
+  it("lets a confined Codex role write generated build output in its own worktree", async () => {
+    const { instance, projectId } = await setup();
+    await api(instance, "POST", `/api/projects/${projectId}/studio/template`);
+    const role = instance.store.findRoleByName(projectId, "QA Tester")!;
+    const task = await newTask(instance, projectId, { roleId: role.id, provider: "codex", message: "Verify the build [args]" });
+    await stepFinished(instance, task.id);
+    const worktree = instance.store.getWorkspace(task.id)!.path;
+    const reply = instance.runner
+      .readEvents(instance.store.listRuns(task.id).at(-1)!.id)
+      .flatMap((e) => (e.event.kind === "text" ? [e.event.text] : []))
+      .join("\n");
+    const roots = JSON.parse(reply.match(/Arguments: (.*)/)![1]!).find((a: string) => a.startsWith("sandbox_workspace_write.writable_roots="));
+    expect(roots).toContain(`'${worktree}'`);
+    expect(roots).toContain(`'${os.tmpdir()}'`);
+    expect(roots).toContain(`'${npmCacheDir()}'`);
+  });
+
   it("saves modifications, deletions and new files without changing the primary tree or index; resumes after restart", async () => {
     const { instance, repo, projectId } = await setup();
     const task = await newTask(instance, projectId);

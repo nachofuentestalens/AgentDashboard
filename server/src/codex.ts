@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Effort } from "@ad/shared";
@@ -23,6 +24,13 @@ export interface CodexArgs {
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
   // Folders writable besides the working directory, for a department owning several.
   writableRoots: string[];
+}
+
+// npm's cache, which installs write to: npm_config_cache, else npm's platform default.
+export function npmCacheDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  if (env.npm_config_cache) return env.npm_config_cache;
+  if (platform === "win32") return path.join(env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "npm-cache");
+  return path.join(os.homedir(), ".npm");
 }
 
 // TOML literal strings take a path as is, backslashes included; they cannot hold a quote.
