@@ -98,7 +98,9 @@ export async function buildApp(options: AppOptions): Promise<App> {
   // loopback only, and here it refuses requests a web page on another site could make: a foreign
   // Host header (DNS rebinding) or a foreign Origin (cross-site form posts and fetches).
   // Trusted hosts are opt-in and exact names only; see docs/REMOTE_ACCESS.md.
-  const allowed = new Set([...LOOPBACK, ...(options.trustedHosts ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean)]);
+  // Names go through the same parsing as the Host header, so a pasted "https://name/" still matches.
+  const trusted = (options.trustedHosts ?? []).map((name) => (name.trim() ? hostnameOf(name.trim()) : null));
+  const allowed = new Set([...LOOPBACK, ...trusted.filter((name): name is string => !!name)]);
   app.addHook("onRequest", async (request, reply) => {
     const host = hostnameOf(request.headers.host ?? "");
     if (!host || !allowed.has(host)) return reply.code(403).send({ error: "Forbidden host." });
