@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { commitSummary } from "./commit-summary.ts";
 import path from "node:path";
 import readline from "node:readline";
@@ -29,7 +30,7 @@ import {
 } from "@ad/shared";
 import type { Bus } from "./bus.ts";
 import { buildArgs, CLAUDE_CLI, resolveLauncher, systemPrompt, type Launcher } from "./claude.ts";
-import { buildCodexArgs, CODEX_CLI } from "./codex.ts";
+import { buildCodexArgs, CODEX_CLI, npmCacheDir } from "./codex.ts";
 import { listDocs } from "./docs.ts";
 import { HttpError } from "./http.ts";
 import { editRules, type EditRules } from "./folders.ts";
@@ -1684,6 +1685,13 @@ export class Runner {
               .map(() => "..")
               .join("/");
             where = `\n\nYour working directory is \`${first}/\` inside the repository; the repository root is \`${up}\`. Only your department's folders are writable.`;
+            // In the task's own worktree, installs, builds and tests must write generated output
+            // (node_modules, dist, tool caches) outside the department folders, or verification
+            // roles can never run the project. Ownership of source files stays a rule, as for Claude.
+            if (workspace) {
+              roots = [repoPath, ...roots, os.tmpdir(), npmCacheDir()];
+              where = `\n\nYour working directory is \`${first}/\` inside the repository; the repository root is \`${up}\`. Edit files only in your department's folders. Elsewhere in this isolated worktree, only generated install, build and test outputs may be written; never change source files there.`;
+            }
           }
           if (!resume || fullAccess)
             input = `<instructions>\n${ctx ? ctx.systemText : systemPrompt(project.name, canEdit, fullAccess)}${where}\n</instructions>\n\n${input}`;
