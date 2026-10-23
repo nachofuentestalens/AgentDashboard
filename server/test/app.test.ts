@@ -33,14 +33,14 @@ describe("request guard", () => {
     expect(ok.statusCode).toBe(200);
   });
 
-  it("accepts hosts and origins the owner allowed", async () => {
-    const app = await testApp(undefined, { allowedHosts: [" Desktop.example.ts.net ", "https://other.example.ts.net"] });
+  it("accepts only the exact trusted hosts it is given", async () => {
+    const app = await testApp(undefined, { trustedHosts: [" MyPC.tail1234.ts.net ", ""] });
     apps.push(app);
-    const ts = { host: "desktop.example.ts.net", origin: "https://desktop.example.ts.net" };
-    expect((await app.fastify.inject({ method: "GET", url: "/api/projects", headers: ts })).statusCode).toBe(200);
-    expect((await app.fastify.inject({ method: "GET", url: "/api/projects", headers: { host: "other.example.ts.net" } })).statusCode).toBe(200);
-    expect((await app.fastify.inject({ method: "GET", url: "/api/projects", headers: { host: "evil.example" } })).statusCode).toBe(403);
-    expect((await app.fastify.inject({ method: "GET", url: "/api/projects", headers: { ...ts, origin: "https://evil.example" } })).statusCode).toBe(403);
+    const get = (host: string, origin?: string) => app.fastify.inject({ method: "GET", url: "/api/projects", headers: origin ? { host, origin } : { host } });
+    expect((await get("mypc.tail1234.ts.net", "https://mypc.tail1234.ts.net")).statusCode).toBe(200);
+    expect((await get("127.0.0.1:5190", "https://mypc.tail1234.ts.net")).statusCode).toBe(200);
+    expect((await get("evil.mypc.tail1234.ts.net")).statusCode).toBe(403);
+    expect((await get("mypc.tail1234.ts.net", "https://evil.example")).statusCode).toBe(403);
   });
 });
 

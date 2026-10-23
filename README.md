@@ -21,6 +21,8 @@ pnpm start
 
 Open http://127.0.0.1:5190. `pnpm start` builds the web app and serves everything from one process.
 
+To reach it from a phone or another PC, see [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) (Tailscale; the server stays on loopback).
+
 To work on the dashboard itself, use `pnpm dev` instead (API on 5190 with auto-restart, Vite on http://127.0.0.1:5173 with hot reload).
 
 ### Try it without spending anything
