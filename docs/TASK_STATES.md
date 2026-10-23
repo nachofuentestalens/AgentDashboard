@@ -254,7 +254,9 @@ changed no files since a passed review, so a status question to a task in `needs
 to prioritize others. While paused, none of its queued role runs start, not even emergencies (the scheduler says why, and "Run anyway"
 still starts one). None of the automation above acts. Daily company assignments are not created, and the coordinator neither starts
 its backlog nor resumes its tasks. Running agents finish their current turn, and plain chats are unaffected. Resuming lets the queue
-and automation continue.
+and automation continue. A step or review that ended while paused (a "Run anyway" run, say) or while a server restart was held gets
+its automatic review, findings round or continue on the first scheduling pass after resuming (`catchUpAutomation` in `runner.ts`),
+so no task waits in `needs_review` for a review that was never asked for.
 
 ## Rollout
 
