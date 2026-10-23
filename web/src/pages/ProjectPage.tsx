@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, useNavigate, useParams } from "react-router";
-import { DEFAULT_PRIORITY, resolveChoice, type Provider, type Effort, type Project, type RoleView } from "@ad/shared";
+import { DEFAULT_PRIORITY, PROVIDERS, resolveChoice, type Provider, type Effort, type Project, type RoleView } from "@ad/shared";
 import { api, keys } from "../api.ts";
 import { Composer } from "../components/Composer.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
@@ -71,28 +71,48 @@ export function ProjectPage({ tab }: { tab: ProjectTab }) {
   );
 }
 
-// Pausing holds the project's queued role work and its automation so other projects get the slots.
+const PAUSE_NAMES: Record<Provider, string> = { claude: "Claude", codex: "Codex" };
+
+// Pausing a provider holds the project's queued role work on it so other projects get its slots.
+// With every provider paused, the project's automation stops too.
 function PauseProject({ project }: { project: Project }) {
   const qc = useQueryClient();
   const toggle = useMutation({
-    mutationFn: () => api.updateProject(project.id, { automationPaused: !project.automationPaused }),
+    mutationFn: (provider: Provider) =>
+      api.updateProject(project.id, {
+        pausedProviders: project.pausedProviders.includes(provider)
+          ? project.pausedProviders.filter((p) => p !== provider)
+          : [...project.pausedProviders, provider],
+      }),
     onSuccess: (p) => qc.setQueryData(keys.project(p.id), p),
   });
+  const paused = project.pausedProviders.map((p) => PAUSE_NAMES[p]).join(" and ");
   return (
     <div className="flex shrink-0 flex-col items-end gap-1">
       <div className="flex items-center gap-2">
-        {project.automationPaused && <span className="text-xs text-amber-300">Paused: no agent work starts here</span>}
-        <Button
-          onClick={() => toggle.mutate()}
-          disabled={toggle.isPending}
-          title={
-            project.automationPaused
-              ? "Let queued tasks start and automation act again"
-              : "Hold queued role tasks and all automation in this project. Running agents finish their current turn; your chats still run."
-          }
-        >
-          {project.automationPaused ? "▶ Resume project" : "⏸ Pause project"}
-        </Button>
+        {project.automationPaused ? (
+          <span className="text-xs text-amber-300">Paused: no agent work starts here</span>
+        ) : (
+          paused && <span className="text-xs text-amber-300">Paused: no {paused} work starts here</span>
+        )}
+        {PROVIDERS.map(({ id }) => {
+          const isPaused = project.pausedProviders.includes(id);
+          return (
+            <Button
+              key={id}
+              onClick={() => toggle.mutate(id)}
+              disabled={toggle.isPending}
+              aria-pressed={isPaused}
+              title={
+                isPaused
+                  ? `Let queued ${PAUSE_NAMES[id]} tasks start again`
+                  : `Hold queued ${PAUSE_NAMES[id]} role tasks in this project (all automation too once every provider is paused). Running agents finish their current turn; your chats still run.`
+              }
+            >
+              {isPaused ? `▶ Resume ${PAUSE_NAMES[id]}` : `⏸ Pause ${PAUSE_NAMES[id]}`}
+            </Button>
+          );
+        })}
       </div>
       <ErrorNote error={toggle.error} />
     </div>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_COORDINATOR_CONFIG, type Task } from "@ad/shared";
+import { DEFAULT_COORDINATOR_CONFIG, type Project, type Task } from "@ad/shared";
 import type { App } from "../src/app.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -301,6 +301,22 @@ describe("task stages", () => {
     await api(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: false });
     await stepFinished(app, queued.id);
     await stepFinished(app, backlog.id);
+  });
+
+  it("pauses one provider's work in a project while the other's runs", async () => {
+    const { app, projectId, qa } = await roleProject();
+    const paused = (await api<Project>(app, "PATCH", `/api/projects/${projectId}`, { pausedProviders: ["claude"] })).body;
+    expect(paused).toMatchObject({ pausedProviders: ["claude"], automationPaused: false });
+    const held = await newTask(app, projectId, { roleId: qa.id, message: "check this", provider: "claude" });
+    const codex = await newTask(app, projectId, { roleId: qa.id, message: "check that", provider: "codex" });
+    await waitFor(() => app.store.listRuns(held.id)[0]?.waitReason?.startsWith("Claude work in this project is paused") === true);
+    await stepFinished(app, codex.id);
+    expect(app.store.listRuns(held.id)[0]!.status).toBe("queued");
+
+    // Pausing the whole project pauses every provider; resuming it releases them all.
+    expect((await api<Project>(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: true })).body.pausedProviders).toEqual(["claude", "codex"]);
+    expect((await api<Project>(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: false })).body.pausedProviders).toEqual([]);
+    await stepFinished(app, held.id);
   });
 
   it("reviews a step that finished while the project was paused once it resumes", async () => {

@@ -61,6 +61,10 @@ const now = () => new Date().toISOString();
 const asEffort = (v: unknown): Effort => (EFFORT_LEVELS.includes(v as Effort) ? (v as Effort) : DEFAULT_EFFORT);
 const optEffort = (v: unknown): Effort | null => (v == null ? null : asEffort(v));
 const optProvider = (v: unknown): Provider | null => (isProvider(v) ? v : null);
+const pausedProviders = (list: unknown[]): Pick<Project, "pausedProviders" | "automationPaused"> => {
+  const paused = PROVIDERS.map((p) => p.id).filter((id) => list.includes(id));
+  return { pausedProviders: paused, automationPaused: paused.length === PROVIDERS.length };
+};
 const str = (v: unknown): string | null => (v as string | null) ?? null;
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
 // Unset: the built-in default. An empty string: cleared, meaning unlimited.
@@ -108,7 +112,7 @@ const toProject = (r: Row): Project => ({
   autoContinueSteps: Number(r.auto_continue_steps ?? 0),
   startNextWhenIdle: r.start_next_when_idle === 1,
   autoApprove: r.auto_approve === 1,
-  automationPaused: r.automation_paused === 1,
+  ...pausedProviders(parseJson<unknown[]>(r.paused_providers, [])),
   inboxSteward: r.inbox_steward === 1,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
@@ -638,17 +642,22 @@ export class Store {
         | "startNextWhenIdle"
         | "autoApprove"
         | "automationPaused"
+        | "pausedProviders"
         | "inboxSteward"
       >
     >,
   ): Project | null {
     const current = this.getProject(id);
     if (!current) return null;
-    const next = merge(current, patch);
+    const { automationPaused, ...rest } = patch;
+    const next = merge(current, rest);
+    if (patch.pausedProviders === undefined && automationPaused !== undefined) next.pausedProviders = automationPaused ? PROVIDERS.map((p) => p.id) : [];
+    Object.assign(next, pausedProviders(next.pausedProviders));
     this.db
       .prepare(
         `UPDATE projects SET name = ?, repo_path = ?, default_provider = ?, default_model = ?, default_effort = ?, allowed_tools = ?, auto_review = ?,
-           auto_continue_steps = ?, start_next_when_idle = ?, auto_approve = ?, automation_paused = ?, inbox_steward = ?, updated_at = ? WHERE id = ?`,
+           auto_continue_steps = ?, start_next_when_idle = ?, auto_approve = ?, automation_paused = ?, paused_providers = ?,
+           inbox_steward = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.name,
@@ -662,6 +671,7 @@ export class Store {
         next.startNextWhenIdle ? 1 : 0,
         next.autoApprove ? 1 : 0,
         next.automationPaused ? 1 : 0,
+        JSON.stringify(next.pausedProviders),
         next.inboxSteward ? 1 : 0,
         now(),
         id,

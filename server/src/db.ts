@@ -323,6 +323,12 @@ const MIGRATIONS: (string | ((db: Db) => void))[] = [
       );
       CREATE INDEX IF NOT EXISTS steward_items_task ON steward_items(task_id);`);
   },
+  // 15: The owner pauses each provider's work in a project separately. A paused project pauses all of them.
+  (db) => {
+    const columns = new Set((db.prepare("PRAGMA table_info(projects)").all() as { name: string }[]).map((c) => c.name));
+    if (!columns.has("paused_providers")) db.exec("ALTER TABLE projects ADD COLUMN paused_providers TEXT NOT NULL DEFAULT '[]'");
+    db.exec(`UPDATE projects SET paused_providers = '["claude","codex"]' WHERE automation_paused = 1`);
+  },
 ];
 
 export type Db = DatabaseSync;

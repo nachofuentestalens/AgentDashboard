@@ -185,9 +185,10 @@ export async function buildApp(options: AppOptions): Promise<App> {
     projectsChanged();
     // Turning on "start next when idle" or hands-off delivery may start or approve work right away;
     // pausing or resuming changes what the queue may start.
-    if (body.startNextWhenIdle || body.autoApprove || body.automationPaused !== undefined) runner.tick();
+    const pauseChanged = body.automationPaused !== undefined || body.pausedProviders !== undefined;
+    if (body.startNextWhenIdle || body.autoApprove || pauseChanged) runner.tick();
     // The steward takes over (or hands back) the project's waiting items.
-    if (body.inboxSteward !== undefined || body.automationPaused !== undefined) bus.publish({ type: "inbox_changed" });
+    if (body.inboxSteward !== undefined || pauseChanged) bus.publish({ type: "inbox_changed" });
     return project;
   });
 

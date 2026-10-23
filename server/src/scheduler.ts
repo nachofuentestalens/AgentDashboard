@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER, PROVIDERS, type Effort, type Provider, type ProviderLimits } from "@ad/shared";
+import { DEFAULT_PROVIDER, PROVIDERS, providerLabel, type Effort, type Provider, type ProviderLimits } from "@ad/shared";
 
 // Deciding which queued runs start is a pure function of this snapshot, so the rules can be tested
 // as a table. The runner builds the snapshot from the database and its live processes.
@@ -54,8 +54,8 @@ export interface SchedulerState {
   staffedRoles: Set<string>;
   // Projects with an open emergency task.
   frozenProjects: Set<string>;
-  // Projects whose agent work the owner paused.
-  pausedProjects?: Set<string>;
+  // Projects whose agent work the owner paused, with the providers they paused it for.
+  pausedProviders?: Map<string, Set<Provider>>;
   active: ActiveRun[];
   queued: QueuedRun[];
   providerHolds?: Map<Provider, ProviderHold>;
@@ -83,6 +83,8 @@ export const isHeldReason = (reason: string) => /daily budget|emergency task|^Co
 
 // Not a held reason: the owner paused the project on purpose, so its queue does not ask for them.
 export const PROJECT_PAUSED = "The project is paused. Resume it to let its agents work.";
+export const providerPausedReason = (provider: Provider) =>
+  `${providerLabel(provider)} work in this project is paused. Resume it, or switch the task to another provider.`;
 
 // Queue order inside a department, and among emergencies: higher priority first, then older.
 export function byPriority(a: QueuedRun, b: QueuedRun): number {
@@ -104,7 +106,9 @@ export function plan(input: SchedulerState): Plan {
   // files alongside another writer of their department.
   const blocker = (q: QueuedRun): string | null => {
     // The owner's pause comes first, even before an emergency: they chose to put this project aside.
-    if (!q.forced && input.pausedProjects?.has(q.projectId)) return PROJECT_PAUSED;
+    const paused = q.forced ? undefined : input.pausedProviders?.get(q.projectId);
+    if (paused?.size === PROVIDERS.length) return PROJECT_PAUSED;
+    if (paused?.has(q.provider ?? DEFAULT_PROVIDER)) return providerPausedReason(q.provider ?? DEFAULT_PROVIDER);
     if (q.dependencyBlocker) return q.dependencyBlocker;
     const dept = input.departments.get(q.departmentId);
     const deptName = dept?.name ?? "Its department";
