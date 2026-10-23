@@ -303,6 +303,27 @@ describe("task stages", () => {
     await stepFinished(app, backlog.id);
   });
 
+  it("reviews a step that finished while the project was paused once it resumes", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: true, autoReview: true });
+    const task = await newTask(app, projectId, { roleId: qa.id, message: "work [review-pass]" });
+    await waitFor(() => app.store.listRuns(task.id)[0]?.waitReason?.includes("project is paused") === true);
+    // The owner forces the run through the pause: its finished step is not reviewed yet.
+    await api(app, "POST", `/api/runs/${app.store.listRuns(task.id)[0]!.id}/force`);
+    expect((await stepFinished(app, task.id)).stage).toBe("needs_review");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(app.store.listRuns(task.id).map((r) => r.purpose)).toEqual(["work"]);
+
+    await api(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: false });
+    await waitFor(() => app.store.listTaskReviews(task.id).length === 1 && app.store.getTask(task.id)!.status === "idle", 15_000);
+    expect(app.store.listRuns(task.id).map((r) => r.purpose)).toEqual(["work", "review"]);
+    expect(app.store.listTaskReviews(task.id)[0]!.verdict).toBe("pass");
+    // The passed review is not asked for again on later passes.
+    app.runner.tick();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(app.store.listRuns(task.id)).toHaveLength(2);
+  });
+
   it("starts more backlog work as soon as the provider's agent limit is raised", async () => {
     const { app, projectId, qa } = await roleProject();
     await api(app, "POST", `/api/roles/${qa.id}/agents`, {});

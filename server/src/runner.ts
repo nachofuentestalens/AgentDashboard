@@ -130,6 +130,8 @@ export class Runner {
   private readonly deliveryPending = new Set<string>();
   // Suppress repeated delivery failures until the reviewed work or its integration context changes.
   private readonly deliveryFailed = new Map<string, string>();
+  // taskId → the last run automate() acted on, so the catch-up pass never repeats it.
+  private readonly automatedRuns = new Map<string, string>();
   // taskId:checkpoint:baseline → whether the checkpoint is an ancestor of that baseline.
   private readonly integratedCache = new Map<string, boolean>();
   private tickPending = false;
@@ -622,6 +624,7 @@ export class Runner {
         await this.resumeModelRuns();
         await this.deliverReviewed();
         if (this.closed || this.restartHeld) return;
+        this.catchUpAutomation();
         this.startIdleBacklog();
         let holds = new Map<Provider, ProviderHold>();
         try {
@@ -976,6 +979,26 @@ export class Runner {
     return !!last?.runId && last.verdict === "pass" && (last.commit ?? null) === checkpoint;
   }
 
+  // automate() only runs as a run ends, so a step or review that ended while its project was paused
+  // (an owner-forced run, say) or a restart was held would wait in review forever. Each pass hands
+  // such a task's last run to automate() once the project runs again; it is the same run either way.
+  private catchUpAutomation(): void {
+    for (const project of this.store.listProjects()) {
+      if (project.automationPaused || this.isProjectBusy(project.id) || this.deliveryPending.has(project.id)) continue;
+      if (!project.autoReview && !project.autoApprove && project.autoContinueSteps === 0) continue;
+      for (const task of this.store.listTasks(project.id)) {
+        if (!task.roleId || task.status !== "idle" || (task.stage !== "needs_review" && task.stage !== "changes_requested")) continue;
+        const last = this.store.listRuns(task.id).at(-1);
+        if (!last || last.status !== "succeeded" || this.automatedRuns.get(task.id) === last.id) continue;
+        // Only a finished step asks for a review, and a passed review on this checkpoint already covers it.
+        if (last.purpose === "work" && (task.stage !== "needs_review" || task.handoffRunId === last.id || this.passedOnCheckpoint(task))) continue;
+        this.automate(task.id, last, (event) => {
+          if (event.kind === "notice") this.note(task.id, event.level, event.text);
+        });
+      }
+    }
+  }
+
   // The project's opt-in automation after a step or a review ends: ask for a review, continue after
   // a passed one up to the project's step limit, or (hands-off delivery) send the findings back to
   // the author. Approval itself happens in deliverReviewed.
@@ -988,6 +1011,7 @@ export class Runner {
     if (!task || !project || project.automationPaused || task.status !== "idle") return false;
     // The inbox steward's triage is not work to review or continue: the steward closes it itself.
     if (this.store.isStewardTask(task.id)) return false;
+    this.automatedRuns.set(task.id, ended.id);
     try {
       if (ended.purpose === "review" && task.stage === "changes_requested") {
         const review = this.store.listTaskReviews(task.id).at(-1);
