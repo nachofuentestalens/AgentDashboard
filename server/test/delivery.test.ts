@@ -115,6 +115,21 @@ describe("managed project delivery", () => {
     await waitFor(() => app.store.listRuns(next.id).length > 0, 15_000);
   });
 
+  it("still integrates passed work while the owner pauses the project, without starting its successor", async () => {
+    const { repo, projectId, programmer, qa, snapshot } = await setup();
+    await snapshot();
+    const first = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass]" });
+    await stepFinished(app, first.id);
+    await api(app, "POST", `/api/tasks/${first.id}/actions`, { action: "review" });
+    await stepFinished(app, first.id);
+    const next = await newTask(app, projectId, { roleId: qa, dependencyIds: [first.id] });
+    await api(app, "PATCH", `/api/projects/${projectId}`, { automationPaused: true, startNextWhenIdle: true, autoApprove: true });
+    await waitFor(() => app.store.getTask(first.id)!.stage === "approved", 15_000);
+    expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:agent-work.txt`)).toBe("Unfinished agent work");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(app.store.listRuns(next.id)).toEqual([]);
+  });
+
   it("waits for delegated work without caching an approval failure, then delivers the unchanged parent", async () => {
     const { projectId, programmer, qa, snapshot } = await setup();
     await snapshot();

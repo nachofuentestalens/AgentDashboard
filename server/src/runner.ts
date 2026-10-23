@@ -661,11 +661,11 @@ export class Runner {
   // Hands-off delivery: a task whose agent review passed on its current checkpoint is approved and
   // integrated as the owner would, once no agent runs in its project (the baseline must hold still).
   // Queued work in that project waits so the moment comes; a failure hands the task to the owner.
+  // Pausing a project holds agent compute, not this: integration starts no runs, so finished work still lands.
   private async deliverReviewed(): Promise<void> {
     this.deliveryPending.clear();
     for (const project of this.store.listProjects()) {
-      if (!project.autoApprove || project.automationPaused || !this.deliver || this.isProjectBusy(project.id) || this.store.deliveryPaused(project.id))
-        continue;
+      if (!project.autoApprove || !this.deliver || this.isProjectBusy(project.id) || this.store.deliveryPaused(project.id)) continue;
       const tasks = this.store.listTasks(project.id);
       const key = (task: Task) =>
         JSON.stringify([
