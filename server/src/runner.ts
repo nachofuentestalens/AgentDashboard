@@ -137,6 +137,8 @@ export class Runner {
   private readonly automatedRuns = new Map<string, string>();
   // taskId:checkpoint:baseline → whether the checkpoint is an ancestor of that baseline.
   private readonly integratedCache = new Map<string, boolean>();
+  // commit:path → whether that commit contains the path (commits are immutable).
+  private readonly fileCache = new Map<string, boolean>();
   private tickPending = false;
   private tickAgain = false;
   private syncingGithub = false;
@@ -681,17 +683,19 @@ export class Runner {
           this.store.openChildTasks(task.id).map((child) => child.id),
           this.store.dependencyBlocker(task),
         ]);
-      const ready = tasks.filter(
-        (t) =>
+      const ready: Task[] = [];
+      for (const t of tasks)
+        if (
           t.roleId &&
           t.stage === "needs_review" &&
           t.status === "idle" &&
           !(t.stepState === "done" && t.nextStep) &&
           !this.store.dependencyBlocker(t) &&
-          this.store.openChildTasks(t.id).length === 0 &&
           this.deliveryFailed.get(t.id) !== key(t) &&
-          this.passedOnCheckpoint(t),
-      );
+          this.passedOnCheckpoint(t) &&
+          (await this.blockingChildren(t)).length === 0
+        )
+          ready.push(t);
       ready.push(...(await this.approvedOutsideBaseline(project.id, tasks)).filter((t) => this.deliveryFailed.get(t.id) !== key(t)));
       if (ready.length === 0) continue;
       this.deliveryPending.add(project.id);
@@ -719,7 +723,12 @@ export class Runner {
   private async approvedOutsideBaseline<T extends Task>(projectId: string, tasks: T[]): Promise<T[]> {
     const baseline = this.store.projectBaseline(projectId);
     if (!baseline) return [];
-    const needed = new Set(tasks.filter((t) => t.stage !== "approved" && t.stage !== "closed").flatMap((t) => t.dependencyIds));
+    const open = tasks.filter((t) => t.stage !== "approved" && t.stage !== "closed");
+    const needed = new Set(open.flatMap((t) => t.dependencyIds));
+    for (const child of open) {
+      const parent = child.parentTaskId ? tasks.find((t) => t.id === child.parentTaskId) : undefined;
+      if (parent?.stage === "approved" && (await this.awaitsTaskInputs(child, parent))) needed.add(parent.id);
+    }
     const missing: T[] = [];
     for (const task of tasks) {
       const w = this.store.getWorkspace(task.id);
@@ -734,6 +743,32 @@ export class Runner {
       if (!present) missing.push(task);
     }
     return missing;
+  }
+
+  // Delegated work that holds a task's hands-off delivery. Follow-ups such as defect fixes filed
+  // from the task's own report cannot start before it is integrated, so waiting on them deadlocks.
+  private async blockingChildren(task: Task): Promise<Task[]> {
+    const blocking: Task[] = [];
+    for (const child of this.store.openChildTasks(task.id)) if (!(await this.awaitsTaskInputs(child, task))) blocking.push(child);
+    return blocking;
+  }
+
+  // Whether a required input of the child is missing from the baseline but present in the task's checkpoint.
+  private async awaitsTaskInputs(child: Task, task: Task): Promise<boolean> {
+    const baseline = this.store.projectBaseline(task.projectId);
+    const checkpoint = this.store.getWorkspace(task.id)?.checkpointCommit;
+    if (!baseline || !checkpoint) return false;
+    const has = async (commit: string, file: string) => {
+      const key = `${commit}:${file}`;
+      let present = this.fileCache.get(key);
+      if (present === undefined) {
+        present = (await git(baseline.repoPath, ["cat-file", "-e", `${commit}:${file}`])).ok;
+        this.fileCache.set(key, present);
+      }
+      return present;
+    };
+    for (const file of child.requiredPaths) if (!(await has(baseline.commit, file)) && (await has(checkpoint, file))) return true;
+    return false;
   }
 
   // A notice after the fact goes on the task's latest finished run, so it shows in the transcript.
