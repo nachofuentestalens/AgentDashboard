@@ -15,7 +15,7 @@ The dashboard has no login and starts agents with full access to this machine, s
 
    `status` prints the address, e.g. `https://mypc.tail1234.ts.net`.
 
-4. Tell the dashboard to trust that one name, then start it. Comma-separate several names; matching is exact, no wildcards.
+4. Tell the dashboard to trust that one name, then start it. Comma-separate several names; matching is exact, no wildcards. A pasted `https://...` address works too; only its host name is used.
 
    ```powershell
    $env:AGENT_DASHBOARD_TRUSTED_HOSTS = "mypc.tail1234.ts.net"
