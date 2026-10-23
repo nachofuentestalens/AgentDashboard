@@ -24,6 +24,7 @@ const app = await buildApp({
   logger: true,
   // Demo mode and e2e run the fake agent and must not read the owner's real usage.
   usage: process.env.AGENT_DASHBOARD_FAKE_CLAUDE ? undefined : providerUsageFetcher(),
+  allowedHosts: (process.env.AGENT_DASHBOARD_ALLOWED_HOSTS ?? "").split(",").filter((name) => name.trim()),
 });
 
 // Loopback only, on purpose: the API starts processes and has no authentication.

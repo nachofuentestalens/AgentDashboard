@@ -46,6 +46,8 @@ export interface AppOptions {
   logger?: boolean;
   // Reads providers' usage APIs for the coordinator; absent in tests, which never go online.
   usage?: UsageFetcher;
+  // Extra host names the owner trusts to reach the dashboard, e.g. a Tailscale Serve name.
+  allowedHosts?: string[];
 }
 
 export interface App {
@@ -95,11 +97,13 @@ export async function buildApp(options: AppOptions): Promise<App> {
   // This server starts processes on the developer's machine and has no login. It listens on
   // loopback only, and here it refuses requests a web page on another site could make: a foreign
   // Host header (DNS rebinding) or a foreign Origin (cross-site form posts and fetches).
+  // Owner-listed hosts (a private reverse proxy such as Tailscale Serve) are trusted like loopback.
+  const trusted = new Set([...LOOPBACK, ...(options.allowedHosts ?? []).map((name) => hostnameOf(name.trim())).filter((name) => !!name)]);
   app.addHook("onRequest", async (request, reply) => {
     const host = hostnameOf(request.headers.host ?? "");
-    if (!host || !LOOPBACK.has(host)) return reply.code(403).send({ error: "Forbidden host." });
+    if (!host || !trusted.has(host)) return reply.code(403).send({ error: "Forbidden host." });
     const origin = request.headers.origin;
-    if (origin && !LOOPBACK.has(hostnameOf(origin) ?? "")) return reply.code(403).send({ error: "Forbidden origin." });
+    if (origin && !trusted.has(hostnameOf(origin) ?? "")) return reply.code(403).send({ error: "Forbidden origin." });
     if (runner.restartHeld && !["GET", "HEAD"].includes(request.method) && !request.url.startsWith("/api/server/restart"))
       return reply.code(409).send({ error: "Server restart requested. Cancel preparation before changing work." });
   });

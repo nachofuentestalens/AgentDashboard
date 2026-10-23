@@ -32,6 +32,16 @@ describe("request guard", () => {
     const ok = await app.fastify.inject({ method: "GET", url: "/api/projects", headers: { host: "localhost:5173", origin: "http://localhost:5173" } });
     expect(ok.statusCode).toBe(200);
   });
+
+  it("accepts hosts and origins the owner allowed", async () => {
+    const app = await testApp(undefined, { allowedHosts: [" Desktop.example.ts.net ", "https://other.example.ts.net"] });
+    apps.push(app);
+    const ts = { host: "desktop.example.ts.net", origin: "https://desktop.example.ts.net" };
+    expect((await app.fastify.inject({ method: "GET", url: "/api/projects", headers: ts })).statusCode).toBe(200);
+    expect((await app.fastify.inject({ method: "GET", url: "/api/projects", headers: { host: "other.example.ts.net" } })).statusCode).toBe(200);
+    expect((await app.fastify.inject({ method: "GET", url: "/api/projects", headers: { host: "evil.example" } })).statusCode).toBe(403);
+    expect((await app.fastify.inject({ method: "GET", url: "/api/projects", headers: { ...ts, origin: "https://evil.example" } })).statusCode).toBe(403);
+  });
 });
 
 describe("projects", () => {
