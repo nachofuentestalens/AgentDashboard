@@ -32,7 +32,7 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
 - Workflow and run state changes happen on the server (`runner.ts`, later a workflow state machine), never in React components. The UI only calls the API and renders.
 - The prompt goes to the agent through **stdin**. Never put user or agent text in process arguments, and never spawn through a shell (`shell: true`). Model ids, tool rules and department folders that do become arguments are validated by `shared/src/schemas.ts`. A role's preamble goes in a file (`--append-system-prompt-file`); git commit messages go through stdin (`-F -`).
 - Agents may only ask for things through reply blocks the server checks (`blocks.ts` → `studio.ts`): paths stay under `design/`, roles must exist, delegation depth is capped. Nothing an agent writes is trusted to change dashboard state directly.
-- Keep the guard in `app.ts` (loopback `Host`/`Origin`, JSON-only bodies) and the `127.0.0.1` bind.
+- Keep the guard in `app.ts` (loopback `Host`/`Origin`, JSON-only bodies) and the `127.0.0.1` bind. The only extra names it accepts are the owner's exact `AGENT_DASHBOARD_TRUSTED_HOSTS` (Tailscale Serve, see `docs/REMOTE_ACCESS.md`).
 - Migrations in `db.ts` are append-only: users' databases have already run the existing ones. Add a new entry and never edit a shipped one.
 - Run event files are append-only JSONL with a per-run `seq`. Write before publishing (the client merges fetched and pushed events by `seq`).
 - Unknown stream-json lines must be ignored, not fail a run: the CLI adds event types over time.
