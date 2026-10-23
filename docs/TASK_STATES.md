@@ -239,7 +239,8 @@ count includes them.
   `pass` on the task's current checkpoint, the server approves the task and, with a managed baseline, integrates it exactly as the
   owner's Preview integration → Approve would, once no agent runs in the project (queued work there holds until it lands). A
   `changes` verdict sends the findings back to the author automatically, at most 3 times in a row. A failed integration (conflict,
-  oversized diff, blocker) leaves the task in `needs_review` with a notice for the owner.
+  oversized diff, blocker) leaves the task in `needs_review` with a notice for the owner. Pausing the project does not hold
+  this: integration and publication start no agent runs, so already-passed work still lands while new runs and reviews wait.
   After each integration the baseline is published to GitHub (see [WORKSPACES.md](WORKSPACES.md#github-publication-and-merge)). Agents
   of a hands-off project are told in their preamble to settle routine scope, evidence and acceptance questions themselves and to ask
   other departments with task blocks rather than owner-reviewed proposals.
