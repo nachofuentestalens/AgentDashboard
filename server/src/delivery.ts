@@ -156,7 +156,8 @@ export class Delivery {
       return null;
     }
     const preview = await this.integrate(projectId, taskId);
-    await this.approve(projectId, preview.id);
+    // The runner already decided which delegated work holds delivery (see blockingChildren).
+    await this.approve(projectId, preview.id, true);
     return this.publish(projectId);
   }
 
@@ -174,7 +175,7 @@ export class Delivery {
     }
   }
 
-  approve(projectId: string, previewId: string) {
+  approve(projectId: string, previewId: string, force = false) {
     return this.runner.deliveryOperation(projectId, async () => {
       const project = this.project(projectId);
       const preview = this.store.getStateJson<BaselinePreview>(`baseline-preview.${projectId}`);
@@ -196,7 +197,7 @@ export class Delivery {
       }
       await checkedGit(project.repoPath, ["cat-file", "-e", `${preview.commit}^{commit}`]);
       if (preview.approvesTask && preview.taskId && this.store.getTask(preview.taskId)?.stage === "needs_review")
-        this.runner.stageAction(preview.taskId, { action: "approve" }, true);
+        this.runner.stageAction(preview.taskId, { action: "approve", force }, true);
       const baseline = { repoPath: project.repoPath, commit: preview.commit, approvedAt: new Date().toISOString() };
       this.store.setProjectBaseline(projectId, baseline);
       this.store.setStateJson(`baseline-preview.${projectId}`, null);

@@ -151,6 +151,57 @@ describe("managed project delivery", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers a parent whose open follow-up needs an input only the parent's checkpoint has", async () => {
+    const { repo, projectId, programmer, qa, snapshot } = await setup();
+    await snapshot();
+    const parent = await newTask(app, projectId, { roleId: qa, message: "playtest [write-workspace] [review-pass]" });
+    await stepFinished(app, parent.id);
+    const followUp = app.store.createTask({
+      projectId,
+      roleId: programmer,
+      parentTaskId: parent.id,
+      title: "Fix the reported defect",
+      canEdit: true,
+      model: null,
+      effort: null,
+      requiredPaths: ["agent-work.txt"],
+    });
+    await api(app, "POST", `/api/tasks/${parent.id}/actions`, { action: "review" });
+    await stepFinished(app, parent.id);
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoApprove: true });
+    await waitFor(() => app.store.getTask(parent.id)!.stage === "approved", 15_000);
+    expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:agent-work.txt`)).toBe("Unfinished agent work");
+    expect(app.store.getTask(followUp.id)!.stage).not.toBe("closed");
+  });
+
+  it("integrates an owner-approved parent that an open follow-up's input needs", async () => {
+    const { repo, projectId, programmer, qa, snapshot } = await setup();
+    await snapshot();
+    const parent = await newTask(app, projectId, { roleId: qa, message: "playtest [write-workspace]" });
+    await stepFinished(app, parent.id);
+    app.store.createTask({
+      projectId,
+      roleId: programmer,
+      parentTaskId: parent.id,
+      title: "Fix",
+      canEdit: true,
+      model: null,
+      effort: null,
+      requiredPaths: ["agent-work.txt"],
+    });
+    app.store.updateTask(parent.id, { stage: "needs_review" });
+    expect((await api(app, "POST", `/api/tasks/${parent.id}/actions`, { action: "approve", force: true })).status).toBe(200);
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoApprove: true });
+    const integrated = () => {
+      try {
+        return git(repo, "cat-file", "-t", `${app.store.projectBaseline(projectId)!.commit}:agent-work.txt`) === "blob";
+      } catch {
+        return false;
+      }
+    };
+    await waitFor(integrated, 15_000);
+  });
+
   it("retries failed delivery after the baseline changes, but suppresses unchanged failures", async () => {
     const { projectId, programmer, repo, snapshot } = await setup();
     await snapshot();
