@@ -84,8 +84,6 @@ See [the setup audit](docs/TOKEN_EFFICIENCY.md) for findings and limitations.
 
 The server listens on `127.0.0.1` only and has no login, because it starts processes on your machine. It refuses requests whose `Host` or `Origin` isn't loopback (which blocks DNS rebinding and other websites calling it), and accepts JSON bodies only. Don't expose the port to a network.
 
-To reach it from your phone, put a private, authenticated proxy in front of it, such as Tailscale Serve (`tailscale serve --bg 5190`, never `tailscale funnel`), and list the proxy's host name in `AGENT_DASHBOARD_ALLOWED_HOSTS` (comma-separated, e.g. `desktop-name.tailnet.ts.net`) before starting the server. Anyone who can reach those hosts can run agents on your machine.
-
 ## Develop
 
 | Command                      | What it does                                                                                                                   |
