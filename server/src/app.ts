@@ -35,6 +35,7 @@ import type { UsageFetcher } from "./usage.ts";
 import { ServerRestart } from "./restart.ts";
 import { Company, registerCompanyRoutes } from "./company.ts";
 import { Steward } from "./steward.ts";
+import { Notifier, type SendMessage } from "./notify.ts";
 
 export interface AppOptions {
   restart?: () => void;
@@ -48,6 +49,8 @@ export interface AppOptions {
   usage?: UsageFetcher;
   // Extra hostnames the guard accepts, e.g. a Tailscale Serve name that proxies to loopback.
   trustedHosts?: string[];
+  // Sends owner alerts off the machine (Telegram); absent unless the owner configured it.
+  notify?: SendMessage;
 }
 
 export interface App {
@@ -57,6 +60,7 @@ export interface App {
   studio: Studio;
   company: Company;
   steward: Steward;
+  notifier: Notifier;
   bus: Bus;
   close: () => Promise<void>;
 }
@@ -87,6 +91,14 @@ export async function buildApp(options: AppOptions): Promise<App> {
   const steward = new Steward(store, runner, studio, bus);
   const coordinator = new Coordinator(store, bus, runner, Date.now, options.usage ?? null);
   coordinator.startUsagePolling();
+  const notifier = new Notifier({
+    store,
+    runner,
+    inbox: () => studio.inbox(),
+    providers: () => coordinator.view().providers,
+    dataDir: options.dataDir,
+    send: options.notify ?? null,
+  });
   store.markInterrupted();
   const restart = new ServerRestart(runner, store, options.dataDir, !!options.restart);
   const modelCatalog = await loadModelCatalog(options.dataDir, store.getSettings().codexPath, options.launchers?.codex);
@@ -384,6 +396,17 @@ export async function buildApp(options: AppOptions): Promise<App> {
   registerDeliveryRoutes(app, store, runner, options.dataDir);
   registerCoordinatorRoutes(app, coordinator);
 
+  app.get("/api/notifications", async () => ({ telegram: notifier.enabled, lastError: notifier.lastError }));
+  app.post("/api/notifications/test", async (_request, reply) => {
+    if (!notifier.enabled) return reply.code(409).send({ error: "Telegram is not configured. See docs/NOTIFICATIONS.md." });
+    try {
+      await notifier.test();
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    return { ok: true };
+  });
+
   // ---- live updates
 
   app.get("/api/events", (request, reply) => {
@@ -416,6 +439,7 @@ export async function buildApp(options: AppOptions): Promise<App> {
   // Runs queued before a restart are still waiting for their turn.
   company.start();
   steward.start();
+  notifier.start();
   runner.tick();
 
   return {
@@ -425,10 +449,12 @@ export async function buildApp(options: AppOptions): Promise<App> {
     studio,
     company,
     steward,
+    notifier,
     bus,
     close: async () => {
       company.close();
       steward.close();
+      notifier.close();
       restart.close();
       coordinator.stopUsagePolling();
       runner.close();
