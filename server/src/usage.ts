@@ -60,8 +60,69 @@ async function fetchClaudeUsage(fetchImpl: typeof fetch): Promise<UsageReading[]
   return readings;
 }
 
+// The endpoint Codex's own `/status` reads. Rollout files only change when a Codex session runs,
+// so a held provider would otherwise keep its last numbers past an early or regular reset.
+const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+
+function codexHome(): string {
+  return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+}
+
 function codexSessionsDir(): string {
-  return path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "sessions");
+  return path.join(codexHome(), "sessions");
+}
+
+// `rate_limit.primary_window` / `secondary_window`, named by their length (five hours, a week).
+export function parseCodexUsage(body: unknown): UsageReading[] {
+  const limits = isObject(body) && isObject(body.rate_limit) ? body.rate_limit : null;
+  if (!limits) return [];
+  const out: UsageReading[] = [];
+  for (const [key, fallback] of [
+    ["primary_window", "session"],
+    ["secondary_window", "weekly"],
+  ] as const) {
+    const w = limits[key];
+    if (!isObject(w)) continue;
+    const seconds = typeof w.limit_window_seconds === "number" ? w.limit_window_seconds : null;
+    const window = seconds === null ? fallback : seconds <= 86_400 ? "session" : "weekly";
+    const used = typeof w.used_percent === "number" && Number.isFinite(w.used_percent) && w.used_percent >= 0 ? Math.min(100, w.used_percent) : null;
+    const reset = typeof w.reset_at === "number" && Number.isFinite(w.reset_at) ? new Date(w.reset_at * 1000).toISOString() : null;
+    out.push({ window, usedPercent: used, resetsAt: reset });
+  }
+  return out;
+}
+
+// Uses the CLI's ChatGPT sign-in without refreshing it (that would rotate the token under the CLI).
+async function fetchCodexUsage(fetchImpl: typeof fetch): Promise<UsageReading[]> {
+  let tokens: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(codexHome(), "auth.json"), "utf8")) as unknown;
+    tokens = isObject(parsed) && isObject(parsed.tokens) ? parsed.tokens : undefined;
+  } catch {
+    tokens = undefined;
+  }
+  const token = typeof tokens?.access_token === "string" ? tokens.access_token : "";
+  if (!token) throw new Error("No Codex ChatGPT sign-in found.");
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+  if (typeof tokens?.account_id === "string" && tokens.account_id) headers["ChatGPT-Account-Id"] = tokens.account_id;
+  const res = await fetchImpl(CODEX_USAGE_URL, { headers, signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`Codex usage request failed (HTTP ${res.status}).`);
+  const readings = parseCodexUsage(await res.json());
+  if (!readings.length) throw new Error("Codex's usage response had no limit windows.");
+  return readings;
+}
+
+// The live endpoint first; the newest rollout when it is unavailable (API-key sign-in, expired token, offline).
+export async function codexUsage(fetchImpl: typeof fetch, root = codexSessionsDir()): Promise<UsageReading[]> {
+  try {
+    return await fetchCodexUsage(fetchImpl);
+  } catch (live) {
+    try {
+      return readCodexUsage(root);
+    } catch (local) {
+      throw new Error(`${(local as Error).message} ${(live as Error).message}`);
+    }
+  }
 }
 
 // A rollout line's `token_count` limits, or null. Other limit ids (per-model pools) are not the plan's windows.
@@ -138,5 +199,5 @@ export function readCodexUsage(root = codexSessionsDir()): UsageReading[] {
 }
 
 export function providerUsageFetcher(fetchImpl: typeof fetch = fetch): UsageFetcher {
-  return async (provider) => (provider === "claude" ? fetchClaudeUsage(fetchImpl) : readCodexUsage());
+  return async (provider) => (provider === "claude" ? fetchClaudeUsage(fetchImpl) : codexUsage(fetchImpl));
 }
