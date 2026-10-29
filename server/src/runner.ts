@@ -41,7 +41,7 @@ import { reviewPrompt, roleSystemPrompt, studioContext } from "./prompts.ts";
 import { limitWindowFromError, type RunCoordinator } from "./coordinator.ts";
 import { EFFORT_COST_GUESS, plan, type ProviderHold, type QueuedRun, type SchedulerState } from "./scheduler.ts";
 import { nextStage, type StageEvent } from "./stages.ts";
-import type { Store } from "./store.ts";
+import type { AutoContinueState, Store } from "./store.ts";
 import { efficiencyInstructions, extractHandoff, HANDOFF_REQUEST, totalTokens } from "./efficiency.ts";
 import { modelRoutingInstructions, parseModelReview, validateModelReview } from "./model-routing.ts";
 import { Workspaces } from "./workspaces.ts";
@@ -747,9 +747,16 @@ export class Runner {
 
   // Delegated work that holds a task's hands-off delivery. Follow-ups such as defect fixes filed
   // from the task's own report cannot start before it is integrated, so waiting on them deadlocks.
+  // So does work the agent filed in the step the review passed (re-verifying a fix once it lands,
+  // say): the step was complete without it, and its work never reaches this checkpoint anyway.
   private async blockingChildren(task: Task): Promise<Task[]> {
+    const step = this.store
+      .listRuns(task.id)
+      .filter((r) => r.purpose === "work")
+      .at(-1);
+    const followUps = step ? this.store.tasksFiledSince(task.id, step.startedAt) : new Set<string>();
     const blocking: Task[] = [];
-    for (const child of this.store.openChildTasks(task.id)) if (!(await this.awaitsTaskInputs(child, task))) blocking.push(child);
+    for (const child of this.store.openChildTasks(task.id)) if (!followUps.has(child.id) && !(await this.awaitsTaskInputs(child, task))) blocking.push(child);
     return blocking;
   }
 
@@ -839,14 +846,14 @@ export class Runner {
     for (const project of projects) {
       if (this.isProjectBusy(project.id) || this.deliveryPending.has(project.id) || this.store.deliveryPaused(project.id)) continue;
       for (const task of this.store.stalledTasks(project.id)) {
-        if (task.autoContinues >= project.autoContinueSteps || this.budgetReason(task)) continue;
+        if (task.autoContinues >= project.autoContinueSteps || this.store.autoContinueStopped(task.id) || this.budgetReason(task)) continue;
         const checkpoint = this.store.getWorkspace(task.id)?.checkpointCommit ?? null;
-        const last = this.store.getStateJson<{ runId: string; checkpoint: string | null }>(`auto-continue.${task.id}`);
+        const last = this.store.getStateJson<AutoContinueState>(`auto-continue.${task.id}`);
         // The last automatic continue ended unfinished again without changing any file: the agent is
         // blocked by something a resume cannot change (a read-only permission, say), so stop retrying.
+        // The count stays true (health reports it); the mark lapses once another run follows this one.
         if (last && last.runId === this.store.listRuns(task.id).at(-1)?.id && last.checkpoint === checkpoint) {
-          this.store.setStateJson(`auto-continue.${task.id}`, null);
-          this.publishTask(this.store.updateTask(task.id, { autoContinues: project.autoContinueSteps }));
+          this.store.setStateJson(`auto-continue.${task.id}`, { ...last, stopped: true });
           this.note(task.id, "warn", "The automatic continue changed nothing and the step is still unfinished, so it is not resumed again. Reply to continue.");
           this.bus.publish({ type: "inbox_changed" });
           continue;

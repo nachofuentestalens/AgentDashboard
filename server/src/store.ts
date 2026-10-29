@@ -309,6 +309,13 @@ export type TaskPatch = Partial<
   >
 >;
 
+// The runner's last automatic continue of a task's step, and whether it stopped resuming after it.
+export interface AutoContinueState {
+  runId: string;
+  checkpoint: string | null;
+  stopped?: boolean;
+}
+
 export interface NewTask {
   dependencyIds?: string[];
   requiredPaths?: string[];
@@ -590,6 +597,12 @@ export class Store {
 
   setStateJson(key: string, value: unknown): void {
     this.db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, JSON.stringify(value));
+  }
+
+  // The runner stopped resuming the task's step: its last automatic continue changed nothing and no run followed it.
+  autoContinueStopped(taskId: string): boolean {
+    const state = this.getStateJson<AutoContinueState>(`auto-continue.${taskId}`);
+    return !!state?.stopped && state.runId === this.listRuns(taskId).at(-1)?.id;
   }
 
   // ---- projects
@@ -1487,6 +1500,14 @@ export class Store {
   getHandoff(id: string): Handoff | null {
     const row = this.db.prepare("SELECT * FROM handoffs WHERE id = ?").get(id) as Row | undefined;
     return row ? toHandoff(row) : null;
+  }
+
+  // Tasks created from handoffs the task's agent filed at or after `since`.
+  tasksFiledSince(fromTaskId: string, since: string): Set<string> {
+    const rows = this.db
+      .prepare("SELECT created_task_id FROM handoffs WHERE from_task_id = ? AND created_at >= ? AND created_task_id IS NOT NULL")
+      .all(fromTaskId, since) as Row[];
+    return new Set(rows.map((r) => r.created_task_id as string));
   }
 
   pendingHandoffs(): Handoff[] {

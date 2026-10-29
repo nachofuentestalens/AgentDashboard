@@ -14,7 +14,8 @@ const FAILURE_WINDOW_MS = 6 * 60 * 60_000;
 export interface HealthInput {
   now: number;
   // The project's open tasks (not the steward's own triage) with their runs, oldest first.
-  tasks: { task: Task; runs: Run[] }[];
+  // autoContinueStopped: the runner stopped resuming the task's step after a continue that changed nothing.
+  tasks: { task: Task; runs: Run[]; autoContinueStopped?: boolean }[];
   // Runs in progress across every project, to tell a full machine from a stuck project.
   runningElsewhere: number;
 }
@@ -93,7 +94,7 @@ export function projectHealth({ now, tasks, runningElsewhere }: HealthInput): He
     });
   }
 
-  for (const { task, runs } of tasks) {
+  for (const { task, runs, autoContinueStopped } of tasks) {
     if (!task.roleId) continue;
     const last = runs.at(-1);
     const streak = failureStreak(runs);
@@ -122,7 +123,7 @@ export function projectHealth({ now, tasks, runningElsewhere }: HealthInput): He
         detail: [
           `Last step: ${task.stepState ?? "none"}. Summary: ${firstLine(task.stepSummary ?? "none", 600)}`,
           `Next step: ${task.nextStep ?? "none"}`,
-          `Automatic continues used: ${task.autoContinues}.`,
+          `Automatic continues used: ${task.autoContinues}.${autoContinueStopped ? " Stopped: the last one changed nothing, so the step waits for a reply." : ""}`,
         ].join("\n"),
         taskId: task.id,
         runId: last?.id ?? null,

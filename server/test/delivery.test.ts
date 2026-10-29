@@ -151,6 +151,22 @@ describe("managed project delivery", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers a parent whose reviewed step filed open follow-up work, such as re-verifying the fix", async () => {
+    const { repo, projectId, programmer, snapshot } = await setup();
+    await snapshot();
+    await api(app, "PATCH", `/api/departments/${app.store.getRole(programmer)!.departmentId}`, { autonomy: "auto" });
+    const parent = await newTask(app, projectId, { roleId: programmer, message: "fix it [write-workspace] [review-pass] [task:QA Tester]" });
+    await stepFinished(app, parent.id);
+    const [followUp] = app.store.openChildTasks(parent.id);
+    expect(followUp?.requiredPaths).toEqual([]);
+    await api(app, "POST", `/api/tasks/${parent.id}/actions`, { action: "review" });
+    await stepFinished(app, parent.id);
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoApprove: true });
+    await waitFor(() => app.store.getTask(parent.id)!.stage === "approved", 15_000);
+    expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:agent-work.txt`)).toBe("Unfinished agent work");
+    expect(app.store.getTask(followUp!.id)!.stage).not.toBe("closed");
+  });
+
   it("delivers a parent whose open follow-up needs an input only the parent's checkpoint has", async () => {
     const { repo, projectId, programmer, qa, snapshot } = await setup();
     await snapshot();

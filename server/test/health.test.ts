@@ -104,4 +104,15 @@ describe("project health", () => {
     // The overview groups one error seen across tasks, so the steward can see a shared cause.
     expect(failing.overview).toContain(`${MAX_RETRIES + 1} × same error`);
   });
+
+  it("says when a stuck step's automatic continues stopped, without inflating the count", () => {
+    const stuck = (autoContinueStopped: boolean) =>
+      projectHealth({
+        now: NOW,
+        tasks: [{ task: task("a", { updatedAt: ago(STUCK_MS + min), autoContinues: 1 }), runs: [run("r1", "a")], autoContinueStopped }],
+        runningElsewhere: 0,
+      }).concerns[0]!.detail;
+    expect(stuck(true)).toContain("Automatic continues used: 1. Stopped: the last one changed nothing");
+    expect(stuck(false)).not.toContain("Stopped");
+  });
 });

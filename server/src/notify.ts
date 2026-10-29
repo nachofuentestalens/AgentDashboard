@@ -189,7 +189,7 @@ export class Notifier {
         const tasks = store
           .listTasks(project.id)
           .filter((t) => t.stage !== "closed" && t.status !== "done")
-          .map((task) => ({ task, runs: store.listRuns(task.id) }));
+          .map((task) => ({ task, runs: store.listRuns(task.id), autoContinueStopped: store.autoContinueStopped(task.id) }));
         const running = tasks.reduce((n, t) => n + t.runs.filter((r) => r.status === "running").length, 0);
         return { project, health: projectHealth({ now, tasks, runningElsewhere: Math.max(0, active - running) }) };
       });

@@ -420,15 +420,20 @@ describe("task stages", () => {
     const { app, projectId, qa } = await roleProject();
     await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 5, startNextWhenIdle: true });
     const task = await newTask(app, projectId, { roleId: qa.id, message: "save the report [step-blocked]" });
-    await waitFor(() => app.store.getTask(task.id)!.autoContinues === 5);
+    await waitFor(() => app.store.autoContinueStopped(task.id));
     expect(app.store.listRuns(task.id)).toHaveLength(2);
-    expect(app.store.getTask(task.id)).toMatchObject({ stage: "in_progress", stepState: "partial", status: "idle" });
+    // The count stays what was used, so the steward does not read the stop as many wasted resumes.
+    expect(app.store.getTask(task.id)).toMatchObject({ stage: "in_progress", stepState: "partial", status: "idle", autoContinues: 1 });
     const notices = app.runner.readEvents(app.store.listRuns(task.id)[1]!.id).map((e) => e.event);
     expect(notices).toContainEqual(expect.objectContaining({ kind: "notice", text: expect.stringMatching(/changed nothing/) }));
+    await app.runner["tick"]();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(app.store.listRuns(task.id)).toHaveLength(2);
 
     // The owner's reply starts counting again.
     await api(app, "POST", `/api/tasks/${task.id}/messages`, { text: "Try once more [step-blocked]" });
-    await waitFor(() => app.store.listRuns(task.id).length === 4 && app.store.getTask(task.id)!.autoContinues === 5);
+    await waitFor(() => app.store.listRuns(task.id).length === 4 && app.store.autoContinueStopped(task.id));
+    expect(app.store.getTask(task.id)!.autoContinues).toBe(1);
   });
 
   it("maps the legacy done flag to approve and close", async () => {
