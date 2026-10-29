@@ -369,7 +369,7 @@ export class Steward {
     const tasks = this.store
       .listTasks(projectId)
       .filter((t) => t.stage !== "closed" && t.status !== "done" && !own(t))
-      .map((task) => ({ task, runs: this.store.listRuns(task.id) }));
+      .map((task) => ({ task, runs: this.store.listRuns(task.id), autoContinueStopped: this.store.autoContinueStopped(task.id) }));
     const running = tasks.reduce((n, t) => n + t.runs.filter((r) => r.status === "running").length, 0);
     const health = projectHealth({ now: Date.now(), tasks, runningElsewhere: Math.max(0, this.runner.activeRuns().length - running) });
     for (const concern of health.concerns) {
