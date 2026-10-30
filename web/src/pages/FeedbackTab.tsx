@@ -69,7 +69,7 @@ export function FeedbackTab({ project }: { project: Project }) {
           <input
             aria-label="Source"
             className={`${selectClass} w-48`}
-            placeholder="Source (Steam, Discord…)"
+            placeholder="Source (Owner, Steam, Discord…)"
             value={source}
             onChange={(e) => setSource(e.target.value)}
           />

@@ -566,6 +566,8 @@ export class Studio implements ReplyHandler {
     const items = itemIds.map((id) => this.store.getFeedback(id)).filter((f) => f && f.projectId === projectId);
     if (items.length === 0) throw new HttpError("Select feedback from this project.", 400);
     const list = items.map((item, i) => `${i + 1}. (${item!.source}) ${item!.text.replace(/\s*\n\s*/g, " ")}`).join("\n");
+    // Weighed like player opinions, the owner's own requests were deferred into spec-only "later milestone" tasks and never built.
+    const fromOwner = items.some((item) => isOwnerSource(item!.source));
     const task = this.createTask({
       projectId,
       roleId,
@@ -575,6 +577,12 @@ export class Studio implements ReplyHandler {
         `Triage this player feedback for "${project.name}".`,
         "Group duplicates, weigh each point against the vision and current priorities, and create tasks (task blocks) for the right roles with honest priorities.",
         "List anything you decide not to act on, and why.",
+        ...(fromOwner
+          ? [
+              "Items marked (Owner) are the owner's own requirements, not opinions to weigh: do not defer them to a later milestone or turn them into spec-only tasks.",
+              "Create implementation tasks that deliver each one in the playable build soon, with high priority. If one truly conflicts with the vision or needs a design call, ask the owner with a question block instead of deferring it.",
+            ]
+          : []),
         "",
         list,
       ].join("\n"),
@@ -584,3 +592,6 @@ export class Studio implements ReplyHandler {
     return task;
   }
 }
+
+// The owner pastes their own playtest notes as "Owner" (or "me"); other sources are players.
+const isOwnerSource = (source: string) => /^(owner|me)$/i.test(source.trim());

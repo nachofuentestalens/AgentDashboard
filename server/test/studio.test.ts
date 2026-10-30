@@ -377,7 +377,15 @@ describe("feedback", () => {
     const items = (await api<FeedbackItem[]>(app, "GET", `/api/projects/${projectId}/feedback`)).body;
     expect(items.every((f) => f.status === "triaged" && f.taskId === triage.body.id)).toBe(true);
     await stepFinished(app, triage.body.id);
-    expect(app.store.listMessages(triage.body.id)[0]!.text).toContain("1. (Steam) The lighthouse upgrades feel slow");
+    const prompt = app.store.listMessages(triage.body.id)[0]!.text;
+    expect(prompt).toContain("1. (Steam) The lighthouse upgrades feel slow");
+    expect(prompt).not.toContain("owner's own requirements");
+
+    // The owner's own notes are requirements to build, not opinions to defer.
+    const own = await api<FeedbackItem[]>(app, "POST", `/api/projects/${projectId}/feedback`, { items: [{ text: "Add a codex tab", source: "Owner" }] });
+    const ownTriage = await api<Task>(app, "POST", `/api/projects/${projectId}/feedback/triage`, { itemIds: own.body.map((f) => f.id), roleId: director.id });
+    await stepFinished(app, ownTriage.body.id);
+    expect(app.store.listMessages(ownTriage.body.id)[0]!.text).toMatch(/owner's own requirements[\s\S]*do not defer them/);
   });
 });
 
