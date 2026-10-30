@@ -80,6 +80,8 @@ describe("managed project delivery", () => {
     const nw = await workspaces.ensure(next.id, repo);
     fs.writeFileSync(path.join(nw.path, "saved-wip.txt"), "preserve me");
     await workspaces.checkpoint(next.id, "saved WIP");
+    // Written after the last checkpoint, like a process an earlier run left running.
+    fs.writeFileSync(path.join(nw.path, "late-write.log"), "late");
     const fw = await workspaces.ensure(first.id, repo);
     fs.writeFileSync(path.join(fw.path, "contract.md"), "approved output");
     const checkpoint = await workspaces.checkpoint(first.id, "first output", { title: "Write contract", taskTitle: "Define the gameplay contract" });
@@ -93,6 +95,7 @@ describe("managed project delivery", () => {
     app.runner.send(next.id, "Read the approved contract");
     await stepFinished(app, next.id);
     expect(fs.readFileSync(path.join(nw.path, "saved-wip.txt"), "utf8")).toBe("preserve me");
+    expect(git(nw.path, "log", "--format=%B", "--grep=Before baseline refresh")).toContain("late-write.log");
     expect(fs.readFileSync(path.join(nw.path, "contract.md"), "utf8")).toBe("approved output");
     expect(git(nw.path, "branch", "--show-current")).toBe(nw.branch);
     expect(git(repo, "rev-parse", "HEAD")).toBe(liveHead);
