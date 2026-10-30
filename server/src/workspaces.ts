@@ -117,12 +117,18 @@ export class Workspaces {
     if (!w || !baseline || w.baseCommit === baseline.commit) return w;
     if (!samePath(w.repoPath, baseline.repoPath)) throw new Error("The task and approved baseline belong to different repositories.");
     await this.verify(w);
-    if (await checked(w.path, ["status", "--porcelain"]))
-      throw new Error("Baseline refresh waits for a clean task checkpoint. Save its WIP first; files are preserved.");
-    const head = await checked(w.path, ["rev-parse", "HEAD"]);
+    if (task.stage === "approved" || task.stage === "closed" || w.mergeCommit) throw new Error("Start a new task for changes after approval or integration.");
+    let head = await checked(w.path, ["rev-parse", "HEAD"]);
     if (head !== (w.checkpointCommit ?? w.baseCommit))
       throw new Error("The task branch changed outside the dashboard. Save a fresh checkpoint before refreshing its baseline.");
-    if (task.stage === "approved" || task.stage === "closed" || w.mergeCommit) throw new Error("Start a new task for changes after approval or integration.");
+    // Refresh runs only while no agent works here, and the owner cannot checkpoint a queued task, so
+    // late writes (e.g. a process the last run left behind) are saved here instead of blocking it forever.
+    if (await checked(w.path, ["status", "--porcelain"])) {
+      const saved = await this.checkpoint(taskId, "Before baseline refresh");
+      if (saved?.error) throw new Error(saved.error);
+      head = saved!.checkpointCommit!;
+      Object.assign(w, saved);
+    }
     const commit = await mergeCommit(w.path, head, baseline.commit, `Receive approved project baseline\n\nTask: ${taskId}\n`);
     // Only fast-forward to the prepared merge. No reset, stash, rebase or conflict files.
     if (commit !== head) await checked(w.path, ["-c", "core.hooksPath=", "merge", "--ff-only", "--no-edit", commit]);
