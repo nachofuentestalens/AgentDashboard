@@ -67,7 +67,7 @@ export function stewardPrompt(project: Project, items: Candidate[], brief: strin
     "```decision",
     '{"item": "<item key>", "action": "<one of the item\'s actions>", "text": "...", "reason": "..."}',
     "```",
-    'Actions: answer (needs text) the agent\'s question; accept or reject a design proposal; approve or reject a task request; for finished steps: continue (optionally with text), review (ask the reviewer role), request_changes (needs text), approve (only after a passed agent review of the current work), close (read-only reports only); fix for requested changes; wait for held or blocked runs (they start on their own when the hold clears). Project health concerns: wait (a stall that will clear by itself; you will be asked again if it lasts), retry (a failed task, when the failure looks transient), continue (an idle task in progress; text gives the next instructions), delegate (add `"role": "<role name>"` and put the instructions in text: the role gets a task to fix the cause in the project), report (the cause is in AgentDashboard itself, the tool running the studio: wrong scheduling, a hold that should have cleared, a crash in the dashboard; put your diagnosis and evidence in text and a fix task is filed on the dashboard\'s repository). escalate hands the item to the owner: put your recommendation in text.',
+    'Actions: answer (needs text) the agent\'s question; accept or reject a design proposal; approve or reject a task request; for finished steps: continue (optionally with text), review (ask the reviewer role), request_changes (needs text), approve (only after a passed agent review of the current work; approving ends the task, so if its next step is still to do, add `"role": "<role name>"` and that role gets a follow-up task with text as its instructions), close (read-only reports only); fix for requested changes; wait for held or blocked runs (they start on their own when the hold clears). Project health concerns: wait (a stall that will clear by itself; you will be asked again if it lasts), retry (a failed task, when the failure looks transient), continue (an idle task in progress; text gives the next instructions), delegate (add `"role": "<role name>"` and put the instructions in text: the role gets a task to fix the cause in the project), report (the cause is in AgentDashboard itself, the tool running the studio: wrong scheduling, a hold that should have cleared, a crash in the dashboard; put your diagnosis and evidence in text and a fix task is filed on the dashboard\'s repository). escalate hands the item to the owner: put your recommendation in text.',
     "Escalate only for money, irreversible deletion, credentials, legal or licensing, publishing outside the repository, open and costly game-direction choices, or missing information. Do not ask question blocks; use escalate. Do not edit files.",
     ...items.map((c, i) =>
       [`## ${i + 1}. ${c.title}`, `Item key: ${c.key}`, `Kind: ${c.kind}; actions: ${(c.actions ?? STEWARD_ACTIONS[c.kind]).join(", ")}`, c.detail].join("\n"),
@@ -335,7 +335,15 @@ export class Steward {
             this.runner.stageAction(task.id, { action: "close" });
           } else {
             if (!passed) throw new Error("approval needs a passed agent review of the current work.");
+            // Approval ends the task; its next step only happens if someone is given it.
+            const role = d.role ? this.delegateRole(project, d, steward) : null;
             this.runner.stageAction(task.id, { action: "approve" }, false, steward.id);
+            if (role)
+              this.fileTask(project, role, steward, {
+                title: `Follow-up: ${task.nextStep ?? task.title}`,
+                parentTaskId: task.id,
+                message: `The inbox steward approved "${task.title}" and hands its next step to you.\n\nSummary: ${task.stepSummary ?? "none"}\nNext step: ${task.nextStep ?? "none"}\n\nInstructions:\n${d.text}`,
+              });
           }
         },
       });
@@ -396,18 +404,31 @@ export class Steward {
 
   // The steward hands the cause of a concern to a project role, as the owner would with a new task.
   private delegate(project: Project, concern: HealthConcern, d: Decision, steward: Role): void {
+    const role = this.delegateRole(project, d, steward);
+    this.fileTask(project, role, steward, {
+      title: `Fix: ${concern.title}`,
+      parentTaskId: concern.taskId,
+      message: `The inbox steward found a problem in the project and hands its cause to you.\n\nProblem: ${concern.title}\n${concern.detail}\n\nInstructions:\n${d.text}`,
+    });
+  }
+
+  private delegateRole(project: Project, d: Decision, steward: Role): Role {
     if (!d.text) throw new Error("delegating needs instructions in text.");
     const role = d.role ? this.store.findRoleByName(project.id, d.role) : null;
     if (!role || role.id === steward.id) throw new Error(`"${d.role ?? ""}" is not a role of this project.`);
+    return role;
+  }
+
+  private fileTask(project: Project, role: Role, steward: Role, t: { title: string; parentTaskId: string | null; message: string }): void {
     this.studio.createTask({
       projectId: project.id,
       roleId: role.id,
-      title: `Fix: ${concern.title}`.slice(0, 120),
+      title: t.title.slice(0, 120),
       priority: MAX_PRIORITY - 2,
-      parentTaskId: concern.taskId,
+      parentTaskId: t.parentTaskId,
       depth: 1,
       createdByRoleId: steward.id,
-      message: `The inbox steward found a problem in the project and hands its cause to you.\n\nProblem: ${concern.title}\n${concern.detail}\n\nInstructions:\n${d.text}`,
+      message: t.message,
     });
   }
 

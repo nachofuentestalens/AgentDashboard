@@ -61,6 +61,16 @@ describe("inbox steward", () => {
     await waitFor(() => triage.every((t) => app.store.getTask(t.id)?.stage === "closed"));
   }, 60_000);
 
+  it("hands the next step of a task it approves to the role it names", async () => {
+    const { app, projectId, role } = await stewardProject();
+    const task = await newTask(app, projectId, { roleId: role("Systems Designer").id, title: "Fix gate evidence", message: "[step-follow-up] [review-pass]" });
+    await waitFor(() => app.store.getTask(task.id)?.stage === "approved", 60_000);
+    await waitFor(() => app.store.listTasks(projectId).some((t) => t.parentTaskId === task.id));
+    const followUp = app.store.listTasks(projectId).find((t) => t.parentTaskId === task.id)!;
+    expect(followUp).toMatchObject({ title: "Follow-up: Re-run the gate [follow-up].", roleId: role("Game Director").id });
+    expect(app.store.listMessages(followUp.id)[0]!.text).toContain("Re-run the gate against the fixed evidence.");
+  }, 60_000);
+
   it("leaves the owner's inbox alone on projects without it", async () => {
     const app = await testApp();
     apps.push(app);

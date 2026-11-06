@@ -33,7 +33,7 @@ const decision = z.object({
     .nullish()
     .transform((s) => s || null),
   reason: z.string().trim().min(1).max(2000),
-  // The role a "delegate" decision hands work to.
+  // The role a "delegate" decision hands work to, or that gets the next step of an approved task.
   role: z.string().trim().min(1).max(100).optional(),
 });
 
