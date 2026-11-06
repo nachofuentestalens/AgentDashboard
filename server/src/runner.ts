@@ -202,12 +202,15 @@ export class Runner {
     }
   }
 
-  async verifyWorkspaceSnapshot(taskId: string): Promise<void> {
+  // Integration takes the checkpoint commit, never the worktree files. Once that exact commit is
+  // approved, later stray writes (a process its last run left running) stay in the worktree and must
+  // not block delivery: an approved task runs no agent that could ever checkpoint them.
+  async verifyWorkspaceSnapshot(taskId: string, approved = false): Promise<void> {
     const w = this.store.getWorkspace(taskId);
     if (!w) throw new RunnerError("Task workspace not found.", 404);
     await this.workspaces.verify(w);
     const head = await git(w.path, ["rev-parse", "HEAD"]);
-    const dirty = await git(w.path, ["status", "--porcelain"]);
+    const dirty = approved && w.approvedCommit === w.checkpointCommit ? { ok: true, stdout: "" } : await git(w.path, ["status", "--porcelain"]);
     if (!head.ok || head.stdout !== w.checkpointCommit || !dirty.ok || dirty.stdout)
       throw new RunnerError("Save and approve a fresh checkpoint before integrating. The task worktree changed.", 409);
   }

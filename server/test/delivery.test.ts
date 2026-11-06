@@ -264,6 +264,24 @@ describe("managed project delivery", () => {
     expect((await api<Inbox>(app, "GET", "/api/inbox")).body.blocked).toEqual([]);
   });
 
+  it("integrates an approved prerequisite whose worktree changed after approval, keeping the stray files out of the baseline", async () => {
+    const { repo, projectId, programmer, qa, workspaces, snapshot, approveTask } = await setup();
+    await snapshot();
+    const first = await newTask(app, projectId, { roleId: programmer });
+    const fw = await workspaces.ensure(first.id, repo);
+    fs.writeFileSync(path.join(fw.path, "server.log"), "evidence");
+    await workspaces.checkpoint(first.id, "first output");
+    await approveTask(first.id);
+    // Written after approval, like a server process the task's last run left running.
+    fs.writeFileSync(path.join(fw.path, "server.log"), "late write");
+    const next = await newTask(app, projectId, { roleId: qa, dependencyIds: [first.id], requiredPaths: ["server.log"] });
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoApprove: true });
+    app.runner.send(next.id, "Read the approved evidence");
+    await stepFinished(app, next.id);
+    expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:server.log`)).toBe("evidence");
+    expect(fs.readFileSync(path.join(fw.path, "server.log"), "utf8")).toBe("late write");
+  });
+
   it("refuses stale approval and leaves conflicting worktrees untouched", async () => {
     const { repo, projectId, programmer, workspaces, endpoint, snapshot, approveTask } = await setup();
     await snapshot();
@@ -282,9 +300,14 @@ describe("managed project delivery", () => {
     const p = await api<BaselinePreview>(app, "POST", `${endpoint}/integrate`, { taskId: first.id });
     expect(p.status).toBe(200);
     fs.writeFileSync(path.join(a.path, "extra.md"), "unreviewed");
+    git(a.path, "add", "extra.md");
+    git(a.path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "unreviewed");
     expect((await api(app, "POST", `${endpoint}/approve`, { previewId: p.body.id })).status).toBe(409);
-    fs.unlinkSync(path.join(a.path, "extra.md"));
+    git(a.path, "reset", "-q", "--mixed", "HEAD~1");
+    // Uncommitted files are not in the approved checkpoint, so they neither block nor reach the baseline.
     expect((await api(app, "POST", `${endpoint}/approve`, { previewId: p.body.id })).status).toBe(200);
+    expect(git(repo, "ls-tree", "--name-only", app.store.projectBaseline(projectId)!.commit)).not.toContain("extra.md");
+    expect(fs.readFileSync(path.join(a.path, "extra.md"), "utf8")).toBe("unreviewed");
     const conflict = await api<{ error: string }>(app, "POST", `${endpoint}/integrate`, { taskId: second.id });
     expect(conflict.status).toBe(409);
     expect(conflict.body.error).toContain("conflicting");
