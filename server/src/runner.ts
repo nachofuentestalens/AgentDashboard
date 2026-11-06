@@ -202,12 +202,14 @@ export class Runner {
     }
   }
 
-  async verifyWorkspaceSnapshot(taskId: string): Promise<void> {
+  // An approved task integrates its pinned commit, so later uncommitted writes (a server its run left
+  // running, say) cannot be part of it. Refusing them would hold its successors forever.
+  async verifyWorkspaceSnapshot(taskId: string, allowUncommitted = false): Promise<void> {
     const w = this.store.getWorkspace(taskId);
     if (!w) throw new RunnerError("Task workspace not found.", 404);
     await this.workspaces.verify(w);
     const head = await git(w.path, ["rev-parse", "HEAD"]);
-    const dirty = await git(w.path, ["status", "--porcelain"]);
+    const dirty = allowUncommitted ? { ok: true, stdout: "" } : await git(w.path, ["status", "--porcelain"]);
     if (!head.ok || head.stdout !== w.checkpointCommit || !dirty.ok || dirty.stdout)
       throw new RunnerError("Save and approve a fresh checkpoint before integrating. The task worktree changed.", 409);
   }

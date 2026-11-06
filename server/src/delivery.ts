@@ -138,7 +138,7 @@ export class Delivery {
       const approved = this.store.taskApproved(task) && w.approvedCommit === w.checkpointCommit;
       if ((!ready && !approved) || !w.checkpointCommit || w.error || (task.stepState === "done" && task.nextStep))
         throw new HttpError("Finish and checkpoint the task before reviewing its integration.", 409);
-      await this.runner.verifyWorkspaceSnapshot(taskId);
+      await this.runner.verifyWorkspaceSnapshot(taskId, approved);
       const blocked = this.store.dependencyBlocker(task);
       if (blocked) throw new HttpError(blocked, 409);
       const message = await checkedGit(w.path, ["show", "-s", "--format=%B", w.checkpointCommit]);
@@ -193,7 +193,7 @@ export class Delivery {
           throw new HttpError("Task approval changed. Prepare a fresh integration preview.", 409);
         const blocker = this.store.dependencyBlocker(task);
         if (blocker) throw new HttpError(blocker, 409);
-        await this.runner.verifyWorkspaceSnapshot(task.id);
+        await this.runner.verifyWorkspaceSnapshot(task.id, !canApprove && !!approved);
       }
       await checkedGit(project.repoPath, ["cat-file", "-e", `${preview.commit}^{commit}`]);
       if (preview.approvesTask && preview.taskId && this.store.getTask(preview.taskId)?.stage === "needs_review")
