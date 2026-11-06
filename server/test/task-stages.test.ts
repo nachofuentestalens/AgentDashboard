@@ -416,6 +416,19 @@ describe("task stages", () => {
     expect(app.store.getTask(task.id)).toMatchObject({ stage: "needs_review", autoContinues: 1 });
   });
 
+  it("resumes a done step its agent handed off at a phase boundary instead of leaving it in progress", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 1 });
+    const task = await newTask(app, projectId, { roleId: qa.id, message: "work [step-done] [handoff]" });
+    await waitFor(() => app.store.getTask(task.id)!.status === "idle" && app.store.listRuns(task.id)[0]!.status === "succeeded");
+    expect(app.store.getTask(task.id)).toMatchObject({ stage: "in_progress", stepState: "done" });
+
+    await api(app, "PATCH", `/api/projects/${projectId}`, { startNextWhenIdle: true });
+    await stepFinished(app, task.id);
+    expect(app.store.listMessages(task.id).filter((m) => m.role === "user")[1]!.text).toBe("Continue the unfinished step: Tune the dash cooldown.");
+    expect(app.store.getTask(task.id)).toMatchObject({ stage: "needs_review", autoContinues: 1 });
+  });
+
   it("stops resuming a partial step after an automatic continue that changed nothing", async () => {
     const { app, projectId, qa } = await roleProject();
     await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 5, startNextWhenIdle: true });
