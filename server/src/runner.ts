@@ -692,7 +692,10 @@ export class Runner {
           t.roleId &&
           t.stage === "needs_review" &&
           t.status === "idle" &&
-          !(t.stepState === "done" && t.nextStep) &&
+          // Approval releases dependents, so it needs the author's own claim the whole task is finished.
+          // A review only judges the step's deliverable: a reply recording an unmet gate passes it too.
+          t.stepState === "complete" &&
+          !t.nextStep &&
           !this.store.dependencyBlocker(t) &&
           this.deliveryFailed.get(t.id) !== key(t) &&
           this.passedOnCheckpoint(t) &&
@@ -1080,6 +1083,12 @@ export class Runner {
       if (ended.purpose === "review") {
         const passed = this.store.listTaskReviews(task.id).at(-1);
         if (passed?.runId !== ended.id || passed.verdict !== "pass") return false;
+        if (project.autoApprove && task.stepState !== "complete" && !(task.stepState === "done" && task.nextStep))
+          record({
+            kind: "notice",
+            level: "warn",
+            text: "Not approved automatically: the author did not report the whole task complete. Approve it yourself or ask the agent to finish it.",
+          });
         if (task.stepState !== "done" || !task.nextStep || task.autoContinues >= project.autoContinueSteps) return false;
         this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
         record({

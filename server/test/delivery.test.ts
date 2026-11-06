@@ -106,7 +106,7 @@ describe("managed project delivery", () => {
     const { repo, projectId, programmer, qa, snapshot } = await setup();
     await snapshot();
     const liveHead = git(repo, "rev-parse", "HEAD");
-    const first = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass]" });
+    const first = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass] [step-complete]" });
     await stepFinished(app, first.id);
     const next = await newTask(app, projectId, { roleId: qa, dependencyIds: [first.id] });
     await api(app, "PATCH", `/api/projects/${projectId}`, { startNextWhenIdle: true, autoApprove: true });
@@ -121,7 +121,7 @@ describe("managed project delivery", () => {
   it("still integrates passed work while the owner pauses the project, without starting its successor", async () => {
     const { repo, projectId, programmer, qa, snapshot } = await setup();
     await snapshot();
-    const first = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass]" });
+    const first = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass] [step-complete]" });
     await stepFinished(app, first.id);
     await api(app, "POST", `/api/tasks/${first.id}/actions`, { action: "review" });
     await stepFinished(app, first.id);
@@ -136,7 +136,7 @@ describe("managed project delivery", () => {
   it("waits for delegated work without caching an approval failure, then delivers the unchanged parent", async () => {
     const { projectId, programmer, qa, snapshot } = await setup();
     await snapshot();
-    const parent = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass]" });
+    const parent = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass] [step-complete]" });
     await stepFinished(app, parent.id);
     const child = app.store.createTask({ projectId, roleId: qa, parentTaskId: parent.id, title: "Required work", canEdit: false, model: null, effort: null });
     await api(app, "POST", `/api/tasks/${parent.id}/actions`, { action: "review" });
@@ -158,7 +158,7 @@ describe("managed project delivery", () => {
     const { repo, projectId, programmer, snapshot } = await setup();
     await snapshot();
     await api(app, "PATCH", `/api/departments/${app.store.getRole(programmer)!.departmentId}`, { autonomy: "auto" });
-    const parent = await newTask(app, projectId, { roleId: programmer, message: "fix it [write-workspace] [review-pass] [task:QA Tester]" });
+    const parent = await newTask(app, projectId, { roleId: programmer, message: "fix it [write-workspace] [review-pass] [step-complete] [task:QA Tester]" });
     await stepFinished(app, parent.id);
     const [followUp] = app.store.openChildTasks(parent.id);
     expect(followUp?.requiredPaths).toEqual([]);
@@ -173,7 +173,7 @@ describe("managed project delivery", () => {
   it("delivers a parent whose open follow-up needs an input only the parent's checkpoint has", async () => {
     const { repo, projectId, programmer, qa, snapshot } = await setup();
     await snapshot();
-    const parent = await newTask(app, projectId, { roleId: qa, message: "playtest [write-workspace] [review-pass]" });
+    const parent = await newTask(app, projectId, { roleId: qa, message: "playtest [write-workspace] [review-pass] [step-complete]" });
     await stepFinished(app, parent.id);
     const followUp = app.store.createTask({
       projectId,
@@ -224,7 +224,7 @@ describe("managed project delivery", () => {
   it("retries failed delivery after the baseline changes, but suppresses unchanged failures", async () => {
     const { projectId, programmer, repo, snapshot } = await setup();
     await snapshot();
-    const task = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass]" });
+    const task = await newTask(app, projectId, { roleId: programmer, message: "build it [write-workspace] [review-pass] [step-complete]" });
     await stepFinished(app, task.id);
     await api(app, "POST", `/api/tasks/${task.id}/actions`, { action: "review" });
     await stepFinished(app, task.id);

@@ -247,9 +247,25 @@ describe("task stages", () => {
     expect(app.store.listTaskReviews(task.id)).toHaveLength(1);
   });
 
+  it("leaves a passed task its author never reported complete for the owner, so its dependents stay blocked", async () => {
+    const { app, projectId, qa } = await roleProject();
+    // Like a gate review whose accurate report says the gate is not met yet, without a step block.
+    const gate = await newTask(app, projectId, { roleId: qa.id, title: "Gate", message: "review the gate [review-pass]" });
+    const next = await newTask(app, projectId, { roleId: qa.id, title: "Production", dependencyIds: [gate.id], message: "build" });
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoReview: true, autoApprove: true });
+    await waitFor(() => app.store.listTaskReviews(gate.id).at(-1)?.verdict === "pass", 40_000);
+    await waitFor(() => app.store.getTask(gate.id)!.status === "idle");
+    app.runner.tick();
+    await waitFor(() => (app.store.listRuns(next.id).at(-1)?.waitReason ?? "").startsWith("Dependency"));
+    expect(app.store.getTask(gate.id)!.stage).toBe("needs_review");
+    expect(app.store.listTaskReviews(gate.id).some((r) => r.reviewer === "owner")).toBe(false);
+    const review = app.store.listRuns(gate.id).at(-1)!;
+    expect(fs.readFileSync(app.runner.eventsFile(review.id), "utf8")).toContain("did not report the whole task complete");
+  });
+
   it("approves a passed task and starts the next one without the owner (hands-off delivery)", async () => {
     const { app, projectId, qa } = await roleProject();
-    const first = await newTask(app, projectId, { roleId: qa.id, title: "First check", priority: 9, message: "work [review-pass]" });
+    const first = await newTask(app, projectId, { roleId: qa.id, title: "First check", priority: 9, message: "work [review-pass] [step-complete]" });
     const second = await newTask(app, projectId, { roleId: qa.id, title: "Second check" });
     await api(app, "PATCH", `/api/projects/${projectId}`, { autoReview: true, startNextWhenIdle: true, autoApprove: true });
     // Work, review and baseline integration run back to back; Windows CI has taken over 15 s here.

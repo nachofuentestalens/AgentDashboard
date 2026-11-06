@@ -87,7 +87,7 @@ The agent reports progress with a new reply block, which `blocks.ts` parses like
   automatic continuation limit (an owner message resets the count). An automatic continue that ends `partial` again without
   changing any file is not retried: the agent is blocked by something a resume cannot change (a read-only permission, say), so the
   task waits for the owner. A review of a read-only task judges the author's reply, which is its deliverable, not a commit.
-- **No block**: a successful work run is treated as `done` (the stage becomes `needs_review`). A malformed block becomes a warning
+- **No block**: a successful work run is treated as `done` (the stage becomes `needs_review`). Hands-off delivery still does not approve it, see below. A malformed block becomes a warning
   notice, as other blocks do.
 
 The block is JSON like the others; `state` is `done`, `partial` or `complete`, and `next` is optional. `state`, `summary` and `next`
@@ -236,9 +236,9 @@ count includes them.
   the same as today's queue behaviour, but opt-in per project because some owners want to choose.
 
 - **Hands-off delivery** (`autoApprove`): the owner delegates approval to the agent reviewer. When the latest review is an agent
-  `pass` on the task's current checkpoint, the server approves the task and, with a managed baseline, integrates it exactly as the
+  `pass` on the task's current checkpoint and its author reported the task `complete`, the server approves the task and, with a managed baseline, integrates it exactly as the
   owner's Preview integration → Approve would, once no agent runs in the project (queued work there holds until it lands). A
-  `changes` verdict sends the findings back to the author automatically, at most 3 times in a row. A failed integration (conflict,
+  `changes` verdict sends the findings back to the author automatically, at most 3 times in a row. Approval releases dependents, and a review only judges the step's deliverable (an accurate report that a gate is still unmet passes too), so a pass on a `done` step without `next`, or on a reply without a step block, stays in `needs_review` for the owner with a notice. A failed integration (conflict,
   oversized diff, blocker) leaves the task in `needs_review` with a notice for the owner. Pausing the project does not hold
   this: integration and publication start no agent runs, so already-passed work still lands while new runs and reviews wait.
   After each integration the baseline is published to GitHub (see [WORKSPACES.md](WORKSPACES.md#github-publication-and-merge)). Agents
