@@ -380,7 +380,20 @@ export class Studio implements ReplyHandler {
       // The steward's own work: its questions and holds are the owner's; its finished triage closes by itself.
       if (taskId && this.store.isStewardTask(taskId)) return kind === "question" || kind === "held" || kind === "blocked";
       const item = byKey.get(`${projectId}/${key}`);
-      if (!item) unrouted.push({ projectId, key, kind, title, taskId: null, status: "triaging", action: null, note: null, createdAt: "", decidedAt: null });
+      if (!item)
+        unrouted.push({
+          projectId,
+          key,
+          kind,
+          title,
+          taskId: null,
+          status: "triaging",
+          action: null,
+          note: null,
+          createdAt: "",
+          decidedAt: null,
+          authority: false,
+        });
       if (item?.status === "escalated") stewardNotes[key] = item.note ?? "";
       return item?.status === "escalated";
     };

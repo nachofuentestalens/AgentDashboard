@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  AUTHORITY_ACTIONS,
   inboxKeys,
   isHealthKind,
   MAX_PRIORITY,
@@ -26,6 +27,12 @@ const BATCH = 12;
 const DETAIL_CHARS = 3_000;
 const REPORTS_KEY = "steward.reports";
 const REPORT_OPEN_MS = 24 * 60 * 60_000;
+// How long an escalation waits for the owner before the acting owner decides it instead.
+export const OWNER_GRACE_MS = 30 * 60_000;
+// Who decides for an absent owner: the studio's director, or a dedicated role when there is none.
+export const ACTING_OWNER_ROLE = "Acting Owner";
+const ACTING_OWNER_BRIEF =
+  "Decide what the inbox steward escalated when the owner does not answer in time. You have the owner's authority over the studio's work: approve, close, unblock, run held work and settle open choices from the design documents. Escalate only money, credentials, legal or licensing, publishing outside the repository and irreversible deletion of the owner's data.";
 
 interface Decision {
   item: string;
@@ -42,9 +49,11 @@ interface Candidate {
   detail: string;
   // The kind's actions, minus those that cannot work now (a retry after too many failures).
   actions?: readonly string[];
-  apply: (action: StewardAction, d: Decision, steward: Role) => Promise<void> | void;
+  // actor: the steward, or the acting owner deciding an item the owner left escalated.
+  apply: (action: StewardAction, d: Decision, actor: Role) => Promise<void> | void;
 }
 
+const cap = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const clip = (text: string | null | undefined, max = DETAIL_CHARS) => {
   const t = (text ?? "").trim();
   return t.length > max ? `${t.slice(0, max)}\n[... ${t.length - max} more characters]` : t;
@@ -69,9 +78,42 @@ export function stewardPrompt(project: Project, items: Candidate[], brief: strin
     "```",
     'Actions: answer (needs text) the agent\'s question; accept or reject a design proposal; approve or reject a task request; for finished steps: continue (optionally with text), review (ask the reviewer role), request_changes (needs text), approve (only after a passed agent review of the current work; approving ends the task, so if its next step is still to do, add `"role": "<role name>"` and that role gets a follow-up task with text as its instructions), close (read-only reports only); fix for requested changes; wait for held or blocked runs (they start on their own when the hold clears). Project health concerns: wait (a stall that will clear by itself; you will be asked again if it lasts), retry (a failed task, when the failure looks transient), continue (an idle task in progress; text gives the next instructions), delegate (add `"role": "<role name>"` and put the instructions in text: the role gets a task to fix the cause in the project), report (the cause is in AgentDashboard itself, the tool running the studio: wrong scheduling, a hold that should have cleared, a crash in the dashboard; put your diagnosis and evidence in text and a fix task is filed on the dashboard\'s repository). escalate hands the item to the owner: put your recommendation in text.',
     "Escalate only for money, irreversible deletion, credentials, legal or licensing, publishing outside the repository, open and costly game-direction choices, or missing information. Do not ask question blocks; use escalate. Do not edit files.",
-    ...items.map((c, i) =>
-      [`## ${i + 1}. ${c.title}`, `Item key: ${c.key}`, `Kind: ${c.kind}; actions: ${(c.actions ?? STEWARD_ACTIONS[c.kind]).join(", ")}`, c.detail].join("\n"),
-    ),
+    ...items.map((c, i) => itemSection(c, i, false)),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+const allowedActions = (c: Candidate, authority: boolean): readonly string[] => [
+  ...(c.actions ?? STEWARD_ACTIONS[c.kind]),
+  ...(authority ? AUTHORITY_ACTIONS[c.kind] : []),
+];
+
+const itemSection = (c: Candidate, i: number, authority: boolean, note?: string | null) =>
+  [
+    `## ${i + 1}. ${c.title}`,
+    `Item key: ${c.key}`,
+    `Kind: ${c.kind}; actions: ${allowedActions(c, authority).join(", ")}`,
+    note ? `Escalated by the inbox steward: ${clip(note, 1_500)}` : "",
+    c.detail,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+// The acting owner sees what the steward escalated and the owner left alone, with the steward's reasons.
+export function authorityPrompt(project: Project, items: { candidate: Candidate; note: string | null }[], brief: string | null, overview = ""): string {
+  return [
+    `You are acting for the owner of "${project.name}". The inbox steward escalated ${items.length} item${items.length === 1 ? "" : "s"} to the owner, who has not acted on them in time. The owner wants the studio to run without them: decide each item with the owner's authority. The owner gets your reason as a summary of the decision.`,
+    brief ? `Company brief: ${clip(brief, 2_000)}` : "",
+    overview,
+    "Read the steward's reason and recommendation, the repository, the tasks and design/ before deciding. Settle open choices from the documents and the company brief, prefer reversible choices and state your assumptions.",
+    "For every item, end your reply with exactly one decision block (JSON). `text` carries the answer, instructions or the reason for a rejection; `reason` is the short summary the owner reads.",
+    "```decision",
+    '{"item": "<item key>", "action": "<one of the item\'s actions>", "text": "...", "reason": "..."}',
+    "```",
+    'Beyond the steward\'s actions you may: run_anyway (a held run starts despite its budget or emergency hold); close_task (the item\'s task is closed and its queued runs stop: for work that is obsolete, superseded or cannot succeed); delegate a blocked run (add `"role": "<role name>"`; text tells that role how to clear the block, such as resolving conflicting changes); drop_dependency (a task stops waiting on a prerequisite that was closed without approval). The steward\'s actions are: answer, accept, reject, approve, continue, review, request_changes, approve (after a passed agent review; add role for its next step), close (read-only reports), fix, wait, retry, delegate (with role and text) and report.',
+    "escalate is final: the item stays with the owner. Use it only for money or paid services, credentials, legal or licensing, publishing outside the repository, or irreversible deletion of the owner's data. Do not ask question blocks. Do not edit files.",
+    ...items.map(({ candidate, note }, i) => itemSection(candidate, i, true, note)),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -84,6 +126,7 @@ export class Steward {
   private again = false;
   // The dashboard's own repository: "report" decisions file a fix task on the project that uses it.
   dashboardRepo = path.resolve(import.meta.dirname, "..", "..");
+  ownerGraceMs = OWNER_GRACE_MS;
 
   constructor(
     private store: Store,
@@ -160,10 +203,11 @@ export class Steward {
       for (const item of items) {
         const current = candidates.get(item.key);
         const decision = this.store.stewardDecision<Decision>(project.id, item.key);
-        if (!current) this.store.settleStewardItem(project.id, item.key, "handled", null, decision?.reason ?? "Resolved before the steward acted.");
+        const who = item.authority ? "the acting owner" : "the steward";
+        if (!current) this.store.settleStewardItem(project.id, item.key, "handled", null, decision?.reason ?? `Resolved before ${who} acted.`);
         else if (!decision)
-          this.store.settleStewardItem(project.id, item.key, "escalated", null, `The steward did not decide this item${failure ? `: ${failure}` : "."}`);
-        else await this.apply(project, current, decision);
+          this.store.settleStewardItem(project.id, item.key, "escalated", null, `${cap(who)} did not decide this item${failure ? `: ${failure}` : "."}`);
+        else await this.apply(project, current, decision, item.authority);
         settled = true;
       }
       if (task?.stage && task.stage !== "closed" && task.stage !== "in_review") {
@@ -184,7 +228,10 @@ export class Steward {
 
     const known = this.store.stewardKeys(project.id);
     const fresh = [...candidates.values()].filter((c) => !known.has(c.key)).slice(0, BATCH);
-    if (fresh.length === 0) return;
+    if (fresh.length === 0) {
+      this.handOverdue(project, candidates, brief, overview);
+      return;
+    }
     const role = this.ensureRole(project.id);
     const prompt = stewardPrompt(project, fresh, brief, overview);
     const taskId = this.store.routeStewardItems(
@@ -203,11 +250,46 @@ export class Steward {
     this.bus.publish({ type: "inbox_changed" });
   }
 
-  private async apply(project: Project, item: Candidate, decision: Decision): Promise<void> {
-    const allowed: readonly string[] = item.actions ?? STEWARD_ACTIONS[item.kind];
-    const reason = decision.reason;
+  // Escalations the owner has not acted on within the grace period go to the acting owner, so the
+  // studio does not wait on the owner. Its decisions reach the owner as a summary (notify.ts).
+  private handOverdue(project: Project, candidates: Map<string, Candidate>, brief: string | null, overview: string): void {
+    const cutoff = Date.now() - this.ownerGraceMs;
+    const overdue = this.store
+      .stewardItems({ projectId: project.id, status: "escalated" })
+      .filter((i) => !i.authority && candidates.has(i.key) && i.decidedAt && Date.parse(i.decidedAt) <= cutoff)
+      .slice(0, BATCH);
+    if (overdue.length === 0) return;
+    const role = this.authorityRole(project.id);
+    const prompt = authorityPrompt(
+      project,
+      overdue.map((i) => ({ candidate: candidates.get(i.key)!, note: i.note })),
+      brief,
+      overview,
+    );
+    const taskId = this.store.handToAuthority(
+      project.id,
+      overdue.map((i) => i.key),
+      () =>
+        this.studio.createTask({
+          projectId: project.id,
+          roleId: role.id,
+          title: `Acting for the owner: ${overdue.length} item${overdue.length === 1 ? "" : "s"}`,
+          priority: MAX_PRIORITY,
+          canEdit: false,
+        }).id,
+    );
+    this.runner.send(taskId, prompt);
+    this.bus.publish({ type: "inbox_changed" });
+  }
+
+  private async apply(project: Project, item: Candidate, decision: Decision, authority = false): Promise<void> {
+    const allowed = allowedActions(item, authority);
+    const actor = authority ? this.authorityRole(project.id) : this.ensureRole(project.id);
+    const who = authority ? `${actor.name}, acting for the owner` : "The steward";
+    // The acting owner's reason is the summary the owner receives, so it names who decided.
+    const reason = authority ? `${who}: ${decision.reason}` : decision.reason;
     if (!allowed.includes(decision.action)) {
-      this.store.settleStewardItem(project.id, item.key, "escalated", null, `The steward chose "${decision.action}", which is not allowed here. ${reason}`);
+      this.store.settleStewardItem(project.id, item.key, "escalated", null, `${who} chose "${decision.action}", which is not allowed here. ${decision.reason}`);
       return;
     }
     const action = decision.action as StewardAction;
@@ -216,7 +298,7 @@ export class Steward {
       return;
     }
     try {
-      await item.apply(action, decision, this.ensureRole(project.id));
+      await item.apply(action, decision, actor);
       this.store.settleStewardItem(project.id, item.key, "handled", action, reason);
     } catch (error) {
       this.store.settleStewardItem(
@@ -224,9 +306,42 @@ export class Steward {
         item.key,
         "escalated",
         action,
-        `The steward chose ${action}, but it failed: ${(error as Error).message} (${reason})`,
+        `${who} chose ${action}, but it failed: ${(error as Error).message} (${decision.reason})`,
       );
     }
+  }
+
+  // The studio's director decides for an absent owner; a project without one gets a dedicated role.
+  private authorityRole(projectId: string): Role {
+    const roles = this.store.listRoles(projectId).filter((r) => r.name !== STEWARD_ROLE);
+    let role = roles.find((r) => r.name === "Game Director") ?? roles.find((r) => /director/i.test(r.name)) ?? roles.find((r) => r.name === ACTING_OWNER_ROLE);
+    if (!role) {
+      const steward = this.ensureRole(projectId);
+      role = this.store.createRole({
+        projectId,
+        departmentId: steward.departmentId,
+        name: ACTING_OWNER_ROLE,
+        brief: ACTING_OWNER_BRIEF,
+        provider: null,
+        model: null,
+        effort: "medium",
+        canEdit: false,
+        allowedTools: null,
+        contextDocs: [],
+      });
+    }
+    const id = role.id;
+    if (!this.store.listAgents(projectId).some((a) => a.roleId === id)) this.studio.hire(id);
+    return role;
+  }
+
+  // Stops the task's queued runs and closes it, as the owner's Close does.
+  private closeTask(taskId: string | null, actor: Role): void {
+    const task = taskId ? this.store.getTask(taskId) : null;
+    if (!task) throw new Error("the item has no task to close.");
+    if (this.runner.isTaskRunning(task.id)) throw new Error("the task is running; it cannot be closed now.");
+    for (const run of this.store.listRuns(task.id)) if (run.status === "queued") this.runner.stop(run.id, `Closed by ${actor.name}, acting for the owner.`);
+    this.runner.stageAction(task.id, { action: "close" }, false, actor.id);
   }
 
   private ensureRole(projectId: string): Role {
@@ -366,8 +481,18 @@ export class Steward {
           key: inboxKeys[kind](run),
           kind,
           title: `"${task.title}" is ${kind}`,
-          detail: `Reason: ${run.waitReason ?? "unknown"}. Running it anyway would override a budget or baseline the owner set, which only the owner can do.`,
-          apply: () => {},
+          detail: `Task: "${task.title}" (${roleName(task)}), id ${task.id}.\nReason: ${run.waitReason ?? "unknown"}.\nOverriding a budget or hold the owner set is for the owner or the acting owner only.`,
+          apply: (action, d, actor) => {
+            if (action === "run_anyway") this.runner.force(run.id);
+            else if (action === "close_task") this.closeTask(task.id, actor);
+            else if (action === "delegate")
+              this.fileTask(project, this.delegateRole(project, d, actor), actor, {
+                title: `Unblock: ${task.title}`,
+                parentTaskId: null,
+                message: `"${task.title}" (task ${task.id}) cannot start.\n\nReason: ${run.waitReason ?? "unknown"}\n\nInstructions:\n${d.text}`,
+              });
+            // wait: it starts on its own when the hold clears.
+          },
         });
       }
     }
@@ -377,7 +502,12 @@ export class Steward {
     const tasks = this.store
       .listTasks(projectId)
       .filter((t) => t.stage !== "closed" && t.status !== "done" && !own(t))
-      .map((task) => ({ task, runs: this.store.listRuns(task.id), autoContinueStopped: this.store.autoContinueStopped(task.id) }));
+      .map((task) => ({
+        task,
+        runs: this.store.listRuns(task.id),
+        autoContinueStopped: this.store.autoContinueStopped(task.id),
+        deadDependencies: this.store.deadDependencies(task),
+      }));
     const running = tasks.reduce((n, t) => n + t.runs.filter((r) => r.status === "running").length, 0);
     const health = projectHealth({ now: Date.now(), tasks, runningElsewhere: Math.max(0, this.runner.activeRuns().length - running) });
     for (const concern of health.concerns) {
@@ -387,10 +517,14 @@ export class Steward {
         kind: concern.kind,
         title: concern.title,
         detail: `${task ? `Task: "${task.title}" (${roleName(task)}), id ${task.id}.\n` : ""}${concern.detail}`,
-        actions: concern.kind === "failing" && (concern.failures ?? 0) >= MAX_RETRIES ? STEWARD_ACTIONS.failing.filter((a) => a !== "retry") : undefined,
-        apply: async (action, d, steward) => {
-          if (action === "delegate") this.delegate(project, concern, d, steward);
+        actions: (STEWARD_ACTIONS[concern.kind] as readonly string[]).filter(
+          (a) => !(a === "retry" && (concern.failures ?? 0) >= MAX_RETRIES) && !(a === "drop_dependency" && !concern.deadDependencyIds?.length),
+        ),
+        apply: async (action, d, actor) => {
+          if (action === "delegate") this.delegate(project, concern, d, actor);
           else if (action === "report") this.report(project, concern, d);
+          else if (action === "close_task") this.closeTask(concern.taskId, actor);
+          else if (action === "drop_dependency") this.dropDependencies(concern);
           else if (action === "retry") {
             if ((concern.failures ?? 0) >= MAX_RETRIES) throw new Error(`it already failed ${concern.failures} times in a row.`);
             await this.runner.retry(concern.runId!);
@@ -400,6 +534,16 @@ export class Steward {
       });
     }
     return { candidates: out, overview: health.overview };
+  }
+
+  // The scheduler rechecks dependencies on every pass, so a queued run starts once they are gone.
+  private dropDependencies(concern: HealthConcern): void {
+    const task = concern.taskId ? this.store.getTask(concern.taskId) : null;
+    const dead = new Set(concern.deadDependencyIds ?? []);
+    if (!task || dead.size === 0) throw new Error("the task has no prerequisite closed without approval.");
+    const updated = this.store.updateTask(task.id, { dependencyIds: task.dependencyIds.filter((id) => !dead.has(id)) });
+    if (updated) this.bus.publish({ type: "task_updated", task: updated });
+    this.runner.tick();
   }
 
   // The steward hands the cause of a concern to a project role, as the owner would with a new task.
@@ -415,6 +559,7 @@ export class Steward {
   private delegateRole(project: Project, d: Decision, steward: Role): Role {
     if (!d.text) throw new Error("delegating needs instructions in text.");
     const role = d.role ? this.store.findRoleByName(project.id, d.role) : null;
+    // The steward is read-only; the acting owner may hand work to its own role.
     if (!role || role.id === steward.id) throw new Error(`"${d.role ?? ""}" is not a role of this project.`);
     return role;
   }

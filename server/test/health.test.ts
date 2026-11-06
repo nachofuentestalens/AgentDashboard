@@ -115,4 +115,15 @@ describe("project health", () => {
     expect(stuck(true)).toContain("Automatic continues used: 1. Stopped: the last one changed nothing");
     expect(stuck(false)).not.toContain("Stopped");
   });
+
+  it("reports a task waiting on a prerequisite closed without approval at once, as the only concern for it", () => {
+    const { concerns } = projectHealth({
+      now: NOW,
+      tasks: [{ task: task("a", { status: "queued", updatedAt: ago(STUCK_MS + min) }), runs: [], deadDependencies: [{ id: "p", title: "Old spec" }] }],
+      runningElsewhere: 0,
+    });
+    expect(concerns).toHaveLength(1);
+    expect(concerns[0]).toMatchObject({ kind: "stuck", key: "stuck:a:dead:p", taskId: "a", deadDependencyIds: ["p"] });
+    expect(concerns[0]!.detail).toContain('"Old spec" (id p) was closed without approval');
+  });
 });

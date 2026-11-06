@@ -329,6 +329,11 @@ const MIGRATIONS: (string | ((db: Db) => void))[] = [
     if (!columns.has("paused_providers")) db.exec("ALTER TABLE projects ADD COLUMN paused_providers TEXT NOT NULL DEFAULT '[]'");
     db.exec(`UPDATE projects SET paused_providers = '["claude","codex"]' WHERE automation_paused = 1`);
   },
+  // 16: An escalation the owner leaves unanswered is handed to the project's acting owner (tier 1).
+  (db) => {
+    const columns = new Set((db.prepare("PRAGMA table_info(steward_items)").all() as { name: string }[]).map((c) => c.name));
+    if (!columns.has("tier")) db.exec("ALTER TABLE steward_items ADD COLUMN tier INTEGER NOT NULL DEFAULT 0");
+  },
 ];
 
 export type Db = DatabaseSync;

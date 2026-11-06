@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Inbox, Project, ProviderQuotaView } from "@ad/shared";
+import type { Inbox, Project, ProviderQuotaView, StewardItem } from "@ad/shared";
 import { inboxKeys } from "@ad/shared";
 import { projectHealth, type Health } from "./health.ts";
 import type { Runner } from "./runner.ts";
@@ -15,6 +15,8 @@ export const NOTIFY_INTERVAL_MS = 60_000;
 // a queue that briefly moves) is not resent, and its recovery is only sent once it stays away.
 export const SETTLE_MS = 15 * 60_000;
 const MAX_MESSAGE = 3800;
+// The acting owner's decisions are reported this long after they are made; older ones are not news.
+export const DECISION_WINDOW_MS = 24 * 60 * 60_000;
 const PROVIDER_NAME = { claude: "Claude", codex: "Codex" } as const;
 
 export interface OwnerAlert {
@@ -23,12 +25,16 @@ export interface OwnerAlert {
   text: string;
   // Sent when the alert's key goes away; only for problems whose end is worth hearing about.
   recovery?: string;
+  // Not a problem: a decision made for the owner, reported for their information.
+  info?: boolean;
 }
 
 export interface AlertInput {
   projects: { project: Project; health: Health }[];
   providers: ProviderQuotaView[];
   inbox: Pick<Inbox, "alerts" | "questions">;
+  // Items the acting owner decided for the owner recently (steward.ts).
+  decisions?: (StewardItem & { projectName: string })[];
 }
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 3)}...` : text);
@@ -42,7 +48,7 @@ function reasonLines(detail: string): string[] {
     .map((l) => clip(l, 240));
 }
 
-export function ownerAlerts({ projects, providers, inbox }: AlertInput): OwnerAlert[] {
+export function ownerAlerts({ projects, providers, inbox, decisions = [] }: AlertInput): OwnerAlert[] {
   const out: OwnerAlert[] = [];
   for (const p of providers) {
     if (p.level !== "reserve" && p.level !== "exhausted") continue;
@@ -61,6 +67,13 @@ export function ownerAlerts({ projects, providers, inbox }: AlertInput): OwnerAl
   for (const q of inbox.questions) {
     out.push({ key: inboxKeys.question(q.task), text: [`Question from "${q.task.title}":`, clip(q.task.question ?? "", 400)].join("\n") });
   }
+  for (const d of decisions) {
+    out.push({
+      key: `decision:${d.projectId}:${d.key}`,
+      text: [`${d.projectName}: decided for you (${d.action ?? "handled"}) on ${d.title}`, clip(d.note ?? "", 600)].join("\n"),
+      info: true,
+    });
+  }
   return out;
 }
 
@@ -73,7 +86,7 @@ export interface SentAlert {
 // What to send now: alerts not sent before, and recoveries of sent alerts that stayed away.
 export function alertChanges(sent: ReadonlyMap<string, SentAlert>, alerts: OwnerAlert[], now: number): { messages: string[]; next: Map<string, SentAlert> } {
   const next = new Map<string, SentAlert>(alerts.map((a) => [a.key, { recovery: a.recovery ?? null }]));
-  const fresh = alerts.filter((a) => !sent.has(a.key)).map((a) => `⚠️ ${a.text}`);
+  const fresh = alerts.filter((a) => !sent.has(a.key)).map((a) => `${a.info ? "🧭" : "⚠️"} ${a.text}`);
   const recovered: string[] = [];
   for (const [key, entry] of sent) {
     if (next.has(key)) continue;
@@ -189,11 +202,21 @@ export class Notifier {
         const tasks = store
           .listTasks(project.id)
           .filter((t) => t.stage !== "closed" && t.status !== "done")
-          .map((task) => ({ task, runs: store.listRuns(task.id), autoContinueStopped: store.autoContinueStopped(task.id) }));
+          .map((task) => ({
+            task,
+            runs: store.listRuns(task.id),
+            autoContinueStopped: store.autoContinueStopped(task.id),
+            deadDependencies: store.deadDependencies(task),
+          }));
         const running = tasks.reduce((n, t) => n + t.runs.filter((r) => r.status === "running").length, 0);
         return { project, health: projectHealth({ now, tasks, runningElsewhere: Math.max(0, active - running) }) };
       });
-    return ownerAlerts({ projects, providers: this.deps.providers(), inbox: this.deps.inbox() });
+    const names = new Map(store.listProjects().map((p) => [p.id, p.name]));
+    const decisions = store
+      .stewardItems({ status: "handled", limit: 200 })
+      .filter((i) => i.authority && i.decidedAt && now - Date.parse(i.decidedAt) <= DECISION_WINDOW_MS)
+      .map((i) => ({ ...i, projectName: names.get(i.projectId) ?? "?" }));
+    return ownerAlerts({ projects, providers: this.deps.providers(), inbox: this.deps.inbox(), decisions });
   }
 
   async check(): Promise<void> {
