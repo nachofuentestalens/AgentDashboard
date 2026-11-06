@@ -183,6 +183,9 @@ for (const state of ["done", "complete", "partial"]) {
   if (prompt.includes(`[step-${state}]`))
     blocks.push(fence("step", JSON.stringify({ state, summary: `Fake step ${state}.`, next: state === "complete" ? null : "Tune the dash cooldown." })));
 }
+// A finished step whose next step is work for someone else.
+if (prompt.includes("[step-follow-up]"))
+  blocks.push(fence("step", JSON.stringify({ state: "complete", summary: "Gate evidence fixed.", next: "Re-run the gate [follow-up]." })));
 // A step blocked by something a resume cannot change: every continuation is partial again.
 if (prompt.includes("[step-blocked]"))
   blocks.push(fence("step", JSON.stringify({ state: "partial", summary: "Saving is blocked.", next: "Retry the save [step-blocked]." })));
@@ -195,6 +198,12 @@ for (const [, item, kind, actions] of prompt.matchAll(/^Item key: ((\w+):\S+)\r?
     blocked: { action: "wait" },
     stall: { action: "wait" },
     stuck: { action: "continue" },
+    // Review first, then approve and hand the next step on.
+    review: prompt.includes("[follow-up]")
+      ? prompt.includes("Approve is available")
+        ? { action: "approve", text: "Re-run the gate against the fixed evidence.", role: "Game Director" }
+        : { action: "review" }
+      : undefined,
     // Retry while the server allows it, then blame the dashboard.
     failing: actions.includes("retry") ? { action: "retry" } : { action: "report", text: "The run fails before the agent starts." },
   }[kind] ?? { action: "escalate", text: "Approve it." };

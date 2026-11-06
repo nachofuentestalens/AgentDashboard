@@ -783,6 +783,18 @@ export class Store {
     ).map(toWorkspace);
   }
 
+  // Approved checkpoints whose publication failed: nothing else would push them again.
+  workspacesAwaitingPublication(): TaskWorkspace[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM task_workspaces WHERE publish_error IS NOT NULL AND merge_commit IS NULL AND error IS NULL
+          AND checkpoint_commit IS NOT NULL AND approved_commit = checkpoint_commit AND (published_commit IS NULL OR published_commit != checkpoint_commit)`,
+        )
+        .all() as Row[]
+    ).map(toWorkspace);
+  }
+
   saveWorkspace(w: TaskWorkspace): void {
     this.db
       .prepare(

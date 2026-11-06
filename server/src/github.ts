@@ -138,7 +138,11 @@ export class Github {
   private async requireSnapshot(w: TaskWorkspace) {
     await this.workspaces.verify(w);
     const head = await this.runGit(w.path, ["rev-parse", "HEAD"]);
-    const dirty = await this.runGit(w.path, ["status", "--porcelain"]);
+    // Only the checkpoint commit is pushed and merged. Once it is approved, later uncommitted writes
+    // (a log from a server its run left running, say) cannot be part of it, and refusing them would
+    // hold the task and its successors until someone cleans the worktree by hand.
+    const approved = !!w.checkpointCommit && w.approvedCommit === w.checkpointCommit;
+    const dirty = approved ? { ok: true, stdout: "" } : await this.runGit(w.path, ["status", "--porcelain"]);
     if (!w.checkpointCommit || !head.ok || head.stdout !== w.checkpointCommit || !dirty.ok || dirty.stdout) {
       throw new Error("Save a fresh checkpoint before publishing or merging.");
     }

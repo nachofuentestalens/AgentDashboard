@@ -24,17 +24,19 @@ Item keys come from `inboxKeys` in `shared/src/steward.ts`; they change when the
 
 ## What the steward may do
 
-| Item              | Actions                                                                                                                                                          |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Question          | answer (sent as "Answer from the inbox steward, on the owner's behalf"), escalate                                                                                |
-| Design proposal   | accept (the decision log says "accepted by the inbox steward"), reject, escalate                                                                                 |
-| Task request      | approve, reject, escalate                                                                                                                                        |
-| Finished step     | continue, review (agent review), request_changes, approve (only after a passed agent review of the current checkpoint), close (read-only reports only), escalate |
-| Changes requested | fix, escalate                                                                                                                                                    |
-| Held / blocked    | wait, escalate. Run anyway overrides a budget or baseline the owner set, so it stays the owner's.                                                                |
-| Stall             | wait, delegate (a task for a named project role, with the instructions), report (a fix on the dashboard's own project), escalate                                 |
-| Failing task      | retry (fewer than 3 failures in a row), delegate, report, escalate                                                                                               |
-| Stuck task        | continue (with optional instructions; counts as an automatic continue), delegate, report, escalate                                                               |
+| Item              | Actions                                                                                                                                                                                                                                      |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Question          | answer (sent as "Answer from the inbox steward, on the owner's behalf"), escalate                                                                                                                                                            |
+| Design proposal   | accept (the decision log says "accepted by the inbox steward"), reject, escalate                                                                                                                                                             |
+| Task request      | approve, reject, escalate                                                                                                                                                                                                                    |
+| Finished step     | continue, review (agent review), request_changes, approve (only after a passed agent review of the current checkpoint; with `role`, that role also gets a follow-up task for the step's next step), close (read-only reports only), escalate |
+| Changes requested | fix, escalate                                                                                                                                                                                                                                |
+| Held / blocked    | wait, escalate. Run anyway overrides a budget or baseline the owner set, so it stays the owner's.                                                                                                                                            |
+| Stall             | wait, delegate (a task for a named project role, with the instructions), report (a fix on the dashboard's own project), escalate                                                                                                             |
+| Failing task      | retry (fewer than 3 failures in a row), delegate, report, escalate                                                                                                                                                                           |
+| Stuck task        | continue (with optional instructions; counts as an automatic continue), delegate, report, escalate                                                                                                                                           |
+
+Approving ends a task, so nothing runs its `next` step on its own. When that step is still to do (re-running a gate against fixed evidence, say), the steward names the role in the approval and the follow-up is filed as a child of the approved task, which hands-off delivery integrates first.
 
 Its brief tells it to escalate only money, irreversible deletion, credentials, legal or licensing, publishing outside the repository, open and costly game-direction choices, or missing information. That policy is in the prompt; the table above is what the server enforces.
 

@@ -141,6 +141,26 @@ describe("GitHub checkpoint publication", () => {
     expect(f.pushes).toHaveLength(1);
   });
 
+  it("publishes an approved checkpoint despite later uncommitted writes and retries a failed publication", async () => {
+    const f = await fixture(true);
+    f.instance.store.updateTask(f.task.id, { stage: "approved", stepState: "complete" });
+    f.instance.store.saveWorkspace({ ...f.instance.store.getWorkspace(f.task.id)!, approvedCommit: f.saved.checkpointCommit });
+    // A server the run left running keeps writing its log after approval.
+    fs.writeFileSync(path.join(f.w.path, "server.stdout.log"), "listening on 3299");
+    f.state.pushFails = true;
+    expect((await f.github.publish(f.task.id))?.publishError).toContain("push failed");
+    const [publish, merge] = [f.github.publish.bind(f.github), f.github.merge.bind(f.github)];
+    vi.spyOn(Github.prototype, "publish").mockImplementation(publish);
+    vi.spyOn(Github.prototype, "merge").mockImplementation(merge);
+    vi.spyOn(Github.prototype, "syncMerge").mockResolvedValue(false);
+    f.state.pushFails = false;
+    // The retried publication lets the approved checkpoint merge in the same pass.
+    await f.instance.runner.syncGithubMerges();
+    expect(f.instance.store.getWorkspace(f.task.id)).toMatchObject({ publishError: null, publishedCommit: f.saved.checkpointCommit, mergeCommit: "abc1234" });
+    expect(f.pushes).toHaveLength(2);
+    expect(git(f.w.path, "status", "--porcelain")).toContain("server.stdout.log");
+  });
+
   it("blocks failed checks and a changed PR head, then squash-merges exactly the validated checkpoint", async () => {
     const f = await fixture();
     await f.github.publish(f.task.id);

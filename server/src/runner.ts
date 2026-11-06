@@ -91,6 +91,7 @@ const providerName = (p: Provider) => PROVIDERS.find((x) => x.id === p)!.label;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Budgets use a sliding 24-hour window, so a held run may become startable just by waiting.
 const RECHECK_MS = 60_000;
+const PUBLISH_RETRY_MS = 10 * 60_000;
 // Hands-off delivery sends review findings back this many times in a row before the owner decides.
 const AUTO_FIX_ROUNDS = 3;
 
@@ -142,6 +143,8 @@ export class Runner {
   private tickPending = false;
   private tickAgain = false;
   private syncingGithub = false;
+  // Approved task -> when its failed publication was last retried, so a lasting failure is not retried every pass.
+  private readonly publishRetried = new Map<string, number>();
   private closed = false;
   private readonly recheck: NodeJS.Timeout;
   replies: ReplyHandler | null = null;
@@ -582,6 +585,7 @@ export class Runner {
     if (this.closed || this.restartHeld || this.syncingGithub) return;
     this.syncingGithub = true;
     try {
+      await this.retryPublication();
       for (const w of this.store.workspacesAwaitingMerge()) {
         if (this.closed || this.restartHeld) break;
         const task = this.store.getTask(w.taskId);
@@ -607,6 +611,29 @@ export class Runner {
       }
     } finally {
       this.syncingGithub = false;
+    }
+  }
+
+  // Publication runs once after a work run. If that attempt failed on an approved checkpoint, the
+  // merge and its successors would wait forever, so retry it now and then until it goes through.
+  private async retryPublication(): Promise<void> {
+    for (const w of this.store.workspacesAwaitingPublication()) {
+      if (this.closed || this.restartHeld) return;
+      const task = this.store.getTask(w.taskId);
+      if (!task || !this.store.taskApproved(task) || this.isTaskRunning(w.taskId) || this.isProjectBusy(task.projectId)) continue;
+      if (Date.now() - (this.publishRetried.get(w.taskId) ?? 0) < PUBLISH_RETRY_MS) continue;
+      this.publishRetried.set(w.taskId, Date.now());
+      this.workspaceBusy.add(w.taskId);
+      try {
+        const published = await this.github.publish(w.taskId);
+        if (!this.closed && published && !published.publishError) {
+          this.publishRetried.delete(w.taskId);
+          this.note(w.taskId, "info", `Published again after the earlier failure${published.pullRequestUrl ? `: ${published.pullRequestUrl}` : "."}`);
+          this.publishTask(this.store.getTask(w.taskId));
+        }
+      } finally {
+        this.workspaceBusy.delete(w.taskId);
+      }
     }
   }
 
