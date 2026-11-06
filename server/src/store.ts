@@ -1006,7 +1006,10 @@ export class Store {
   stalledTasks(projectId: string): Task[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM tasks WHERE project_id = ? AND stage = 'in_progress' AND role_id IS NOT NULL AND status = 'idle' AND step_state = 'partial'
+        // A handoff keeps the step in progress even when its block says done (a phase boundary), so
+        // nothing else would ever pick that task up again.
+        `SELECT * FROM tasks WHERE project_id = ? AND stage = 'in_progress' AND role_id IS NOT NULL AND status = 'idle'
+           AND (step_state = 'partial' OR (step_state = 'done' AND handoff_run_id IS NOT NULL))
          ORDER BY emergency DESC, priority DESC, created_at`,
       )
       .all(projectId);

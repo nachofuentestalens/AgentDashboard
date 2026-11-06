@@ -213,7 +213,12 @@ if (preparingHandoff || prompt.includes("[handoff]"))
         verification: "No checks run",
         remaining: "Implement and verify",
       }) +
-      "\n```",
+      "\n```" +
+      // Real agents end a phase with the handoff and its step block in one final message.
+      blocks
+        .filter((block) => block.startsWith("```step"))
+        .map((block) => `\n\n${block}`)
+        .join(""),
   );
 
 if (
