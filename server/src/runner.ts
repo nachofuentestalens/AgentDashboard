@@ -877,11 +877,13 @@ export class Runner {
       for (const task of this.store.stalledTasks(project.id)) {
         if (task.autoContinues >= project.autoContinueSteps || this.store.autoContinueStopped(task.id) || this.budgetReason(task)) continue;
         const checkpoint = this.store.getWorkspace(task.id)?.checkpointCommit ?? null;
+        const baseline = this.store.projectBaseline(project.id)?.commit ?? null;
         const last = this.store.getStateJson<AutoContinueState>(`auto-continue.${task.id}`);
         // The last automatic continue ended unfinished again without changing any file: the agent is
         // blocked by something a resume cannot change (a read-only permission, say), so stop retrying.
-        // The count stays true (health reports it); the mark lapses once another run follows this one.
-        if (last && last.runId === this.store.listRuns(task.id).at(-1)?.id && last.checkpoint === checkpoint) {
+        // The count stays true (health reports it); the mark lapses once another run follows this one
+        // or the baseline moves, since an integrated prerequisite is what a waiting step needs.
+        if (last && last.runId === this.store.listRuns(task.id).at(-1)?.id && last.checkpoint === checkpoint && (last.baseline ?? null) === baseline) {
           this.store.setStateJson(`auto-continue.${task.id}`, { ...last, stopped: true });
           this.note(task.id, "warn", "The automatic continue changed nothing and the step is still unfinished, so it is not resumed again. Reply to continue.");
           this.bus.publish({ type: "inbox_changed" });
@@ -891,7 +893,7 @@ export class Runner {
           this.store.updateTask(task.id, { autoContinues: task.autoContinues + 1 });
           this.note(task.id, "info", `Resuming the unfinished step automatically (${task.autoContinues + 1} of ${project.autoContinueSteps}).`);
           const { run } = this.send(task.id, task.nextStep ? `Continue the unfinished step: ${task.nextStep}` : "Continue the unfinished step.", true);
-          this.store.setStateJson(`auto-continue.${task.id}`, { runId: run.id, checkpoint });
+          this.store.setStateJson(`auto-continue.${task.id}`, { runId: run.id, checkpoint, baseline });
         });
       }
       for (const task of this.store.backlogTasks(project.id)) tryStart(project, task, () => this.stageAction(task.id, { action: "start" }));

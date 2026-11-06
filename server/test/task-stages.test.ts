@@ -449,6 +449,22 @@ describe("task stages", () => {
     expect(app.store.getTask(task.id)!.autoContinues).toBe(1);
   });
 
+  it("resumes a stopped step again once the managed baseline moves, since it may carry the awaited prerequisite", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 5, startNextWhenIdle: true });
+    const task = await newTask(app, projectId, { roleId: qa.id, message: "save the report [step-blocked]" });
+    await waitFor(() => app.store.autoContinueStopped(task.id));
+    expect(app.store.listRuns(task.id)).toHaveLength(2);
+
+    const repo = app.store.getProject(projectId)!.repoPath;
+    app.store.setProjectBaseline(projectId, { repoPath: repo, commit: git(repo, "rev-parse", "HEAD"), approvedAt: new Date().toISOString() });
+    expect(app.store.autoContinueStopped(task.id)).toBe(false);
+    await app.runner["tick"]();
+    // The new continue changes nothing either, so it stops again for this baseline.
+    await waitFor(() => app.store.listRuns(task.id).length === 3 && app.store.autoContinueStopped(task.id));
+    expect(app.store.getTask(task.id)!.autoContinues).toBe(2);
+  });
+
   it("maps the legacy done flag to approve and close", async () => {
     const { app, projectId, qa } = await roleProject();
     const task = await newTask(app, projectId, { roleId: qa.id, message: "check" });

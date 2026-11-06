@@ -313,6 +313,8 @@ export type TaskPatch = Partial<
 export interface AutoContinueState {
   runId: string;
   checkpoint: string | null;
+  // The project's managed baseline when it started: a newer one may carry the inputs the step waited for.
+  baseline?: string | null;
   stopped?: boolean;
 }
 
@@ -599,10 +601,13 @@ export class Store {
     this.db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, JSON.stringify(value));
   }
 
-  // The runner stopped resuming the task's step: its last automatic continue changed nothing and no run followed it.
+  // The runner stopped resuming the task's step: its last automatic continue changed nothing, no run
+  // followed it, and the managed baseline has not moved since (new prerequisites may unblock it).
   autoContinueStopped(taskId: string): boolean {
     const state = this.getStateJson<AutoContinueState>(`auto-continue.${taskId}`);
-    return !!state?.stopped && state.runId === this.listRuns(taskId).at(-1)?.id;
+    if (!state?.stopped || state.runId !== this.listRuns(taskId).at(-1)?.id) return false;
+    const task = this.getTask(taskId);
+    return (state.baseline ?? null) === ((task && this.projectBaseline(task.projectId)?.commit) ?? null);
   }
 
   // ---- projects
