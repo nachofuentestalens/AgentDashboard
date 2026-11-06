@@ -19,13 +19,29 @@ export const STEWARD_ACTIONS = {
   blocked: ["wait", "escalate"],
   stall: ["wait", "delegate", "report", "escalate"],
   failing: ["retry", "delegate", "report", "escalate"],
-  stuck: ["continue", "delegate", "report", "escalate"],
+  // drop_dependency: only for a task waiting on a prerequisite closed without approval (it never will be).
+  stuck: ["continue", "delegate", "report", "drop_dependency", "escalate"],
+} as const satisfies Record<StewardItemKind, readonly string[]>;
+
+// What the acting owner may do on top of the steward's actions, for items the owner left escalated
+// past the grace period (docs/STEWARD.md). Its escalate is final: the item stays with the owner.
+export const AUTHORITY_ACTIONS = {
+  question: [],
+  proposal: [],
+  handoff: [],
+  review: [],
+  changes: [],
+  held: ["run_anyway", "close_task"],
+  blocked: ["delegate", "close_task"],
+  stall: ["close_task"],
+  failing: ["close_task"],
+  stuck: ["close_task"],
 } as const satisfies Record<StewardItemKind, readonly string[]>;
 
 export const HEALTH_KINDS = ["stall", "failing", "stuck"] as const satisfies readonly StewardItemKind[];
 export const isHealthKind = (kind: StewardItemKind) => (HEALTH_KINDS as readonly string[]).includes(kind);
 
-export type StewardAction = (typeof STEWARD_ACTIONS)[StewardItemKind][number];
+export type StewardAction = (typeof STEWARD_ACTIONS)[StewardItemKind][number] | (typeof AUTHORITY_ACTIONS)[StewardItemKind][number];
 
 // Short and stable, so long questions make short keys. Not for security.
 export function shortHash(text: string): string {
@@ -55,8 +71,10 @@ export interface StewardItem {
   key: string;
   kind: StewardItemKind;
   title: string;
-  // The steward's triage task.
+  // The steward's triage task, or the acting owner's once the item was handed on.
   taskId: string | null;
+  // Handed to the acting owner because the owner did not act on its escalation.
+  authority: boolean;
   status: StewardItemStatus;
   action: StewardAction | null;
   // The steward's reason, shown to the owner on escalated and handled items.

@@ -13,7 +13,9 @@ Checked every minute, for every project whose automation is not paused:
 - project health concerns from `server/src/health.ts`: a stalled queue (resent as the stall doubles:
   15, 30, 60 min…; not when every queued run waits on a coordinator quota hold, which the provider
   alert already explains), a task that keeps failing, a task idle in progress with nothing to move it;
-- steward escalations (inbox alerts) and agents' questions waiting for the owner.
+- steward escalations (inbox alerts) and agents' questions waiting for the owner;
+- 🧭 a summary of each decision the acting owner made for the owner (an escalation left unanswered
+  for 30 minutes, see `docs/STEWARD.md`), sent once while it is under a day old.
 
 Each problem is sent once while it lasts; new problems found in one check go out as one message. A
 problem that goes away is remembered for 15 minutes, so one that flaps (usage hovering at the

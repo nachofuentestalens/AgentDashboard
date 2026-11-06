@@ -446,7 +446,20 @@ export class Store {
       note: str(r.note),
       createdAt: r.created_at as string,
       decidedAt: str(r.decided_at),
+      authority: Number(r.tier ?? 0) === 1,
     }));
+  }
+
+  // Escalations the owner left alone move to the acting owner's triage task, created in the same transaction.
+  handToAuthority(projectId: string, keys: string[], createTask: () => string): string {
+    return transaction(this.db, () => {
+      const taskId = createTask();
+      const update = this.db.prepare(
+        "UPDATE steward_items SET status = 'triaging', tier = 1, task_id = ?, decision = NULL WHERE project_id = ? AND item_key = ? AND status = 'escalated' AND tier = 0",
+      );
+      for (const key of keys) update.run(taskId, projectId, key);
+      return taskId;
+    });
   }
 
   isStewardTask(taskId: string): boolean {
@@ -928,6 +941,14 @@ export class Store {
       for (const parent of task.dependencyIds) visit(parent, seen);
     };
     for (const id of ids) visit(id, new Set());
+  }
+
+  // Prerequisites closed without approval: they will never be approved, so the task waits forever.
+  deadDependencies(task: Task): Task[] {
+    return task.dependencyIds.flatMap((id) => {
+      const prerequisite = this.getTask(id);
+      return prerequisite?.stage === "closed" && !this.taskApproved(prerequisite) ? [prerequisite] : [];
+    });
   }
 
   taskApproved(task: Task): boolean {

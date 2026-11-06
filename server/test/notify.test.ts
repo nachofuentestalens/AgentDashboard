@@ -51,6 +51,25 @@ describe("owner alerts", () => {
     expect(alerts).toEqual([]);
   });
 
+  it("sends the owner a summary of each decision the acting owner made for them", () => {
+    const decision = {
+      projectId: "p1",
+      projectName: "Banner & Bounty",
+      key: "handoff:h1",
+      kind: "handoff",
+      title: 'Task request "Build" for Gameplay Programmer',
+      action: "approve",
+      note: "Game Director, acting for the owner: In scope for M3.",
+      authority: true,
+    } as NonNullable<Parameters<typeof ownerAlerts>[0]["decisions"]>[number];
+    const alerts = ownerAlerts({ providers: [], projects: [], inbox: noInbox, decisions: [decision] });
+    const { messages, next } = alertChanges(new Map(), alerts, 0);
+    expect(messages).toEqual([
+      '🧭 Banner & Bounty: decided for you (approve) on Task request "Build" for Gameplay Programmer\nGame Director, acting for the owner: In scope for M3.',
+    ]);
+    expect(alertChanges(next, alerts, 1).messages).toEqual([]);
+  });
+
   it("sends each alert once and a recovery when a recoverable one stays away", () => {
     const exhausted = ownerAlerts({ providers: [provider("claude", "exhausted")], projects: [], inbox: noInbox });
     const first = alertChanges(new Map(), exhausted, 0);
@@ -109,7 +128,7 @@ describe("telegram", () => {
 
 describe("notifier", () => {
   const deps = (dataDir: string, providers: ProviderQuotaView[][], send: NotifierDeps["send"]): NotifierDeps => ({
-    store: { listProjects: () => [] } as unknown as Store,
+    store: { listProjects: () => [], stewardItems: () => [] } as unknown as Store,
     runner: { activeRuns: () => [] } as unknown as Runner,
     inbox: () => noInbox as Inbox,
     providers: () => providers[0]!,

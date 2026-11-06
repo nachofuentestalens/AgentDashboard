@@ -190,23 +190,29 @@ if (prompt.includes("[step-follow-up]"))
 if (prompt.includes("[step-blocked]"))
   blocks.push(fence("step", JSON.stringify({ state: "partial", summary: "Saving is blocked.", next: "Retry the save [step-blocked]." })));
 // The inbox steward's triage: one decision per item, chosen by the item's kind.
+// The acting owner (deciding what the owner left escalated) approves requests and unblocks dead prerequisites.
+const acting = prompt.includes("You are acting for the owner");
 for (const [, item, kind, actions] of prompt.matchAll(/^Item key: ((\w+):\S+)\r?\nKind: \w+; actions: (.*)$/gm)) {
-  const decision = {
-    question: { action: "answer", text: "Use a shield." },
-    proposal: { action: "accept" },
-    held: { action: "wait" },
-    blocked: { action: "wait" },
-    stall: { action: "wait" },
-    stuck: { action: "continue" },
-    // Review first, then approve and hand the next step on.
-    review: prompt.includes("[follow-up]")
-      ? prompt.includes("Approve is available")
-        ? { action: "approve", text: "Re-run the gate against the fixed evidence.", role: "Game Director" }
-        : { action: "review" }
-      : undefined,
-    // Retry while the server allows it, then blame the dashboard.
-    failing: actions.includes("retry") ? { action: "retry" } : { action: "report", text: "The run fails before the agent starts." },
-  }[kind] ?? { action: "escalate", text: "Approve it." };
+  const actingDecision = acting
+    ? { handoff: { action: "approve" }, stuck: actions.includes("drop_dependency") ? { action: "drop_dependency" } : undefined }[kind]
+    : undefined;
+  const decision = actingDecision ??
+    {
+      question: { action: "answer", text: "Use a shield." },
+      proposal: { action: "accept" },
+      held: { action: "wait" },
+      blocked: { action: "wait" },
+      stall: { action: "wait" },
+      stuck: { action: "continue" },
+      // Review first, then approve and hand the next step on.
+      review: prompt.includes("[follow-up]")
+        ? prompt.includes("Approve is available")
+          ? { action: "approve", text: "Re-run the gate against the fixed evidence.", role: "Game Director" }
+          : { action: "review" }
+        : undefined,
+      // Retry while the server allows it, then blame the dashboard.
+      failing: actions.includes("retry") ? { action: "retry" } : { action: "report", text: "The run fails before the agent starts." },
+    }[kind] ?? { action: "escalate", text: "Approve it." };
   blocks.push(fence("decision", JSON.stringify({ item, ...decision, reason: `Fake steward decided ${kind}.` })));
 }
 if (blocks.length) await say(`Here is what I need.\n\n${blocks.join("\n\n")}`);

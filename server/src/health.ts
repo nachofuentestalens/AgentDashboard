@@ -15,7 +15,8 @@ export interface HealthInput {
   now: number;
   // The project's open tasks (not the steward's own triage) with their runs, oldest first.
   // autoContinueStopped: the runner stopped resuming the task's step after a continue that changed nothing.
-  tasks: { task: Task; runs: Run[]; autoContinueStopped?: boolean }[];
+  // deadDependencies: prerequisites closed without approval, which the task would wait on forever.
+  tasks: { task: Task; runs: Run[]; autoContinueStopped?: boolean; deadDependencies?: { id: string; title: string }[] }[];
   // Runs in progress across every project, to tell a full machine from a stuck project.
   runningElsewhere: number;
 }
@@ -31,6 +32,8 @@ export interface HealthConcern {
   failures?: number;
   // stall: every queued run waits on a coordinator quota hold, which the provider alert already explains.
   quotaHold?: boolean;
+  // stuck: prerequisites closed without approval; dropping them is what unblocks the task.
+  deadDependencyIds?: string[];
 }
 
 export interface Health {
@@ -94,8 +97,25 @@ export function projectHealth({ now, tasks, runningElsewhere }: HealthInput): He
     });
   }
 
-  for (const { task, runs, autoContinueStopped } of tasks) {
+  for (const { task, runs, autoContinueStopped, deadDependencies } of tasks) {
     if (!task.roleId) continue;
+    // No approval is coming for a closed prerequisite, so waiting cannot end on its own.
+    if (deadDependencies?.length) {
+      concerns.push({
+        key: `stuck:${task.id}:dead:${deadDependencies.map((d) => d.id).join(",")}`,
+        kind: "stuck",
+        title: `"${task.title}" waits on ${deadDependencies.length === 1 ? "a prerequisite" : "prerequisites"} closed without approval`,
+        detail: [
+          ...deadDependencies.map((d) => `- "${d.title}" (id ${d.id}) was closed without approval and will never be approved.`),
+          `Stage: ${task.stage ?? "none"}; status: ${task.status}.`,
+          "drop_dependency removes these prerequisites so the task can start; close the task instead if the work is no longer wanted.",
+        ].join("\n"),
+        taskId: task.id,
+        runId: runs.at(-1)?.id ?? null,
+        deadDependencyIds: deadDependencies.map((d) => d.id),
+      });
+      continue;
+    }
     const last = runs.at(-1);
     const streak = failureStreak(runs);
     if (last && streak > 0 && (task.status === "failed" || task.status === "interrupted")) {

@@ -71,6 +71,34 @@ describe("inbox steward", () => {
     expect(app.store.listMessages(followUp.id)[0]!.text).toContain("Re-run the gate against the fixed evidence.");
   }, 60_000);
 
+  it("hands an escalation the owner leaves alone to the acting owner, who decides it with the owner's authority", async () => {
+    const { app, projectId, role } = await stewardProject();
+    app.steward.ownerGraceMs = 0;
+    await newTask(app, projectId, { roleId: role("Systems Designer").id, title: "Combat pass", message: "[task:Gameplay Programmer:6]" });
+    await waitFor(() => app.store.stewardItems({ projectId }).some((i) => i.kind === "handoff" && i.authority && i.status === "handled"), 60_000);
+
+    const item = app.store.stewardItems({ projectId }).find((i) => i.kind === "handoff")!;
+    expect(item).toMatchObject({ action: "approve", authority: true });
+    expect(item.note).toBe("Game Director, acting for the owner: Fake steward decided handoff.");
+    expect(app.store.getTask(item.taskId!)).toMatchObject({ roleId: role("Game Director").id, canEdit: false });
+    expect(app.store.listTasks(projectId).some((t) => t.roleId === role("Gameplay Programmer").id)).toBe(true);
+    expect((await api<Inbox>(app, "GET", "/api/inbox")).body.handoffs).toEqual([]);
+  }, 90_000);
+
+  it("unblocks a task waiting on a prerequisite closed without approval", async () => {
+    const { app, projectId, role } = await stewardProject();
+    app.steward.ownerGraceMs = 0;
+    const designer = role("Systems Designer").id;
+    const prerequisite = await newTask(app, projectId, { roleId: designer, title: "Old spec" });
+    expect((await api(app, "POST", `/api/tasks/${prerequisite.id}/actions`, { action: "close" })).status).toBe(200);
+    const task = await newTask(app, projectId, { roleId: designer, title: "Build it", dependencyIds: [prerequisite.id], message: "build" });
+    // The steward's continue cannot move a queued task, so the acting owner drops the dead prerequisite.
+    await waitFor(() => app.store.listRuns(task.id).some((r) => r.status === "succeeded"), 90_000);
+    expect(app.store.getTask(task.id)!.dependencyIds).toEqual([]);
+    const stuck = app.store.stewardItems({ projectId }).find((i) => i.kind === "stuck" && i.action === "drop_dependency")!;
+    expect(stuck).toMatchObject({ status: "handled", authority: true });
+  }, 120_000);
+
   it("leaves the owner's inbox alone on projects without it", async () => {
     const app = await testApp();
     apps.push(app);
