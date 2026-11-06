@@ -247,9 +247,12 @@ describe("managed project delivery", () => {
     const first = await newTask(app, projectId, { roleId: programmer });
     const fw = await workspaces.ensure(first.id, repo);
     fs.writeFileSync(path.join(fw.path, "contract.md"), "approved output");
+    fs.writeFileSync(path.join(fw.path, "server.log"), "started");
     await workspaces.checkpoint(first.id, "first output");
     // Approved without integrating: the dependency graph is satisfied but the baseline lacks the output.
     await approveTask(first.id);
+    // A server the run left behind keeps writing its tracked log after approval.
+    fs.writeFileSync(path.join(fw.path, "server.log"), "still running");
     const next = await newTask(app, projectId, { roleId: qa, dependencyIds: [first.id], requiredPaths: ["contract.md"] });
     app.runner.send(next.id, "Read the approved contract");
     await waitFor(() => (app.store.listRuns(next.id).at(-1)?.waitReason ?? "").startsWith("Baseline: integrate"));
@@ -261,6 +264,8 @@ describe("managed project delivery", () => {
     app.runner.tick();
     await stepFinished(app, next.id);
     expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:contract.md`)).toBe("approved output");
+    expect(git(repo, "show", `${app.store.projectBaseline(projectId)!.commit}:server.log`)).toBe("started");
+    expect(fs.readFileSync(path.join(fw.path, "server.log"), "utf8")).toBe("still running");
     expect((await api<Inbox>(app, "GET", "/api/inbox")).body.blocked).toEqual([]);
   });
 
@@ -282,9 +287,14 @@ describe("managed project delivery", () => {
     const p = await api<BaselinePreview>(app, "POST", `${endpoint}/integrate`, { taskId: first.id });
     expect(p.status).toBe(200);
     fs.writeFileSync(path.join(a.path, "extra.md"), "unreviewed");
+    git(a.path, "add", "extra.md");
+    git(a.path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "outside the dashboard");
     expect((await api(app, "POST", `${endpoint}/approve`, { previewId: p.body.id })).status).toBe(409);
-    fs.unlinkSync(path.join(a.path, "extra.md"));
+    // Back on the approved commit, uncommitted files cannot be part of it and do not block it.
+    git(a.path, "reset", "--soft", "HEAD~1");
     expect((await api(app, "POST", `${endpoint}/approve`, { previewId: p.body.id })).status).toBe(200);
+    expect(git(repo, "ls-tree", "--name-only", app.store.projectBaseline(projectId)!.commit)).not.toContain("extra.md");
+    expect(fs.readFileSync(path.join(a.path, "extra.md"), "utf8")).toBe("unreviewed");
     const conflict = await api<{ error: string }>(app, "POST", `${endpoint}/integrate`, { taskId: second.id });
     expect(conflict.status).toBe(409);
     expect(conflict.body.error).toContain("conflicting");
