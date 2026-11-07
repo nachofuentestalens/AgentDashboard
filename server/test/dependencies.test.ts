@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULT_COORDINATOR_CONFIG, type CoordinatorView } from "@ad/shared";
+import { DEFAULT_COORDINATOR_CONFIG, type CoordinatorView, type Inbox } from "@ad/shared";
 import type { App } from "../src/app.ts";
 import { baselineBlocker } from "../src/readiness.ts";
 import { Workspaces } from "../src/workspaces.ts";
@@ -48,9 +48,13 @@ describe("task prerequisites", () => {
     app.runner.tick();
     await waitFor(() => !!app.store.getRun(run.id)?.waitReason?.startsWith("Dependency:"));
     expect(app.store.getRun(run.id)!.status).toBe("queued");
-    // Closing/dropping work is not acceptance.
+    expect((await api<Inbox>(app, "GET", "/api/inbox")).body.blocked).toEqual([]);
+    // Closing/dropping work is not acceptance, and no approval will ever come: the owner sees it as blocked.
     app.store.updateTask(a.id, { stage: "closed" });
-    expect(app.store.dependencyBlocker(app.store.getTask(b.id)!)).toContain("owner approval");
+    expect(app.store.dependencyBlocker(app.store.getTask(b.id)!)).toContain("was closed without approval");
+    app.runner.tick();
+    await waitFor(() => !!app.store.getRun(run.id)?.waitReason?.includes("was closed without approval"));
+    expect((await api<Inbox>(app, "GET", "/api/inbox")).body.blocked.map((h) => h.task.id)).toEqual([b.id]);
     app.store.updateTask(a.id, { stage: "needs_review" });
     expect((await api(app, "POST", `/api/tasks/${a.id}/actions`, { action: "approve" })).status).toBe(200);
     await stepFinished(app, b.id);
@@ -127,7 +131,7 @@ describe("task prerequisites", () => {
     expect(app.store.dependencyBlocker(b)).toBeNull();
     await api(app, "POST", `/api/tasks/${a.id}/actions`, { action: "reopen" });
     await api(app, "POST", `/api/tasks/${a.id}/actions`, { action: "close" });
-    expect(app.store.dependencyBlocker(b)).toContain("owner approval");
+    expect(app.store.dependencyBlocker(b)).toContain("was closed without approval");
   });
 
   it("holds untracked inputs before spending tokens and releases after they are committed", async () => {

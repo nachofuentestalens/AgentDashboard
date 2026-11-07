@@ -432,6 +432,24 @@ describe("task stages", () => {
     expect(app.store.getTask(task.id)).toMatchObject({ stage: "needs_review", autoContinues: 1 });
   });
 
+  it("does not resume a partial step right after the owner stops its run, leaving the task idle", async () => {
+    const { app, projectId, qa } = await roleProject();
+    await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 5 });
+    const task = await newTask(app, projectId, { roleId: qa.id, message: "work [step-partial]" });
+    await waitFor(() => app.store.getTask(task.id)!.stepState === "partial" && app.store.getTask(task.id)!.status === "idle");
+    // Like an owner stopping a long run to compact the task or repair its worktree.
+    app.runner.send(task.id, "keep going [slow]");
+    await waitFor(() => app.store.listRuns(task.id).at(-1)?.status === "running");
+    expect((await api(app, "POST", `/api/runs/${app.store.listRuns(task.id).at(-1)!.id}/stop`)).status).toBe(202);
+    await waitFor(() => app.store.getTask(task.id)!.status === "idle");
+    expect(app.store.getTask(task.id)!.stepState).toBe("partial");
+    await api(app, "PATCH", `/api/projects/${projectId}`, { startNextWhenIdle: true });
+    await app.runner["tick"]();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(app.store.listRuns(task.id).at(-1)!.status).toBe("stopped");
+    expect(app.store.getTask(task.id)!.status).toBe("idle");
+  });
+
   it("resumes a done step its agent handed off at a phase boundary instead of leaving it in progress", async () => {
     const { app, projectId, qa } = await roleProject();
     await api(app, "PATCH", `/api/projects/${projectId}`, { autoContinueSteps: 1 });

@@ -2,7 +2,7 @@
 
 Role tasks have `dependencyIds` (existing role task IDs in the same project) and `requiredPaths` (repository-relative committed inputs). Configure them in the task page's Prerequisites panel or the create/update task API. Task reply blocks can request the same fields; pending handoffs preserve them until the owner accepts. Unknown IDs, duplicates, cycles and unsafe paths are rejected. Stop queued/running work before changing prerequisites; reopen or continue accepted work before editing its prerequisites.
 
-`store.ts` validates the graph and checks approval. Closed/dropped work does not count without a valid owner approval; reopening invalidates it. An explicitly unfinished multi-step prerequisite does not release successors. Workspace prerequisites need approval of their current checkpoint. Deleted prerequisites remain blockers rather than silently disappearing.
+`store.ts` validates the graph and checks approval. Closed/dropped work does not count without a valid owner approval; reopening invalidates it. A successor of dropped work waits with its own reason and shows in the Inbox under **Blocked**, since no approval will come by itself. An explicitly unfinished multi-step prerequisite does not release successors. Workspace prerequisites need approval of their current checkpoint. Deleted prerequisites remain blockers rather than silently disappearing.
 
 `readiness.ts` checks the execution checkout: prerequisite merge commits (or approved checkpoint commits for local integration) must be ancestors of its HEAD, and required paths must exist in HEAD without uncommitted changes. This also detects stale persistent task worktrees. These checks do not merge, copy files, reset worktrees, or spend agent tokens.
 

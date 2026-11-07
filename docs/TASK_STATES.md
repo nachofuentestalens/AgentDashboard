@@ -86,7 +86,7 @@ The agent reports progress with a new reply block, which `blocks.ts` parses like
   "start next when idle", an idle staffed role resumes such a step before starting backlog work, counted against the project's
   automatic continuation limit (an owner message resets the count). An automatic continue that ends `partial` again without
   changing any file is not retried: the agent is blocked by something a resume cannot change (a read-only permission, say), so the
-  task waits for the owner. A review of a read-only task judges the author's reply, which is its deliverable, not a commit.
+  task waits for the owner. Nor is a step whose last run was stopped: the stop leaves the task idle until the owner replies (coordinator and model pauses resume their own runs). A review of a read-only task judges the author's reply, which is its deliverable, not a commit.
 - **No block**: a successful work run is treated as `done` (the stage becomes `needs_review`). Hands-off delivery still does not approve it, see below. A malformed block becomes a warning
   notice, as other blocks do.
 

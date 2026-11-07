@@ -929,6 +929,9 @@ export class Store {
       const prerequisite = this.getTask(id);
       if (!prerequisite || prerequisite.projectId !== task.projectId) return "Dependency: prerequisite is missing: " + id;
       const accepted = this.taskApproved(prerequisite);
+      // Dropped work never reaches approval by itself, so the owner must see this wait as blocked.
+      if (!accepted && prerequisite.stage === "closed")
+        return `Dependency: ${prerequisite.title} was closed without approval. Reopen and approve it, or change this task's prerequisites.`;
       if (!accepted || prerequisite.status === "running" || prerequisite.status === "queued")
         return "Dependency: waiting for owner approval of " + prerequisite.title;
       if (prerequisite.stepState === "done" && prerequisite.nextStep) return "Dependency: remaining steps must finish in " + prerequisite.title;

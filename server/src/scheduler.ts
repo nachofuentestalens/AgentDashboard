@@ -77,7 +77,9 @@ const money = (n: number) => `$${n.toFixed(2)}`;
 // unlike a busy agent or a full slot, which clear up by themselves.
 // Baseline waits the owner must resolve (integrate, repair a worktree, enable delivery), unlike the
 // short waits while a delivery operation or other agents finish.
-export const isBlockedReason = (reason: string) => /^Baseline:/.test(reason) && !/a delivery operation is running|waiting for running agents/.test(reason);
+export const isBlockedReason = (reason: string) =>
+  (/^Baseline:/.test(reason) && !/a delivery operation is running|waiting for running agents/.test(reason)) ||
+  /^Dependency: .* was closed without approval\./.test(reason);
 
 export const isHeldReason = (reason: string) => /daily budget|emergency task|^Coordinator:/.test(reason);
 

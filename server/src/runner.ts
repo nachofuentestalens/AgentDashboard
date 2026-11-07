@@ -853,6 +853,9 @@ export class Runner {
       if (this.isProjectBusy(project.id) || this.deliveryPending.has(project.id) || this.store.deliveryPaused(project.id)) continue;
       for (const task of this.store.stalledTasks(project.id)) {
         if (task.autoContinues >= project.autoContinueSteps || this.store.autoContinueStopped(task.id) || this.budgetReason(task)) continue;
+        // A stop is deliberate: resuming at once would leave the owner no idle moment (to compact or
+        // repair the worktree, say). Coordinator and model pauses resume their runs themselves.
+        if (this.store.listRuns(task.id).at(-1)?.status === "stopped") continue;
         const checkpoint = this.store.getWorkspace(task.id)?.checkpointCommit ?? null;
         const last = this.store.getStateJson<AutoContinueState>(`auto-continue.${task.id}`);
         // The last automatic continue ended unfinished again without changing any file: the agent is
