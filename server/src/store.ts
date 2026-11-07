@@ -605,6 +605,12 @@ export class Store {
     return !!state?.stopped && state.runId === this.listRuns(taskId).at(-1)?.id;
   }
 
+  // The coordinator paused the task's last run for usage and resumes it itself when there is room.
+  coordinatorPaused(taskId: string): boolean {
+    const paused = this.getStateJson<Record<string, { runId: string }>>("coordinator.paused");
+    return !!paused?.[taskId] && paused[taskId]!.runId === this.listRuns(taskId).at(-1)?.id;
+  }
+
   // ---- projects
 
   listProjects(): Project[] {

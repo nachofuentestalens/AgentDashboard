@@ -15,7 +15,8 @@ export interface HealthInput {
   now: number;
   // The project's open tasks (not the steward's own triage) with their runs, oldest first.
   // autoContinueStopped: the runner stopped resuming the task's step after a continue that changed nothing.
-  tasks: { task: Task; runs: Run[]; autoContinueStopped?: boolean }[];
+  // coordinatorPaused: the coordinator paused its last run for usage and resumes it when there is room.
+  tasks: { task: Task; runs: Run[]; autoContinueStopped?: boolean; coordinatorPaused?: boolean }[];
   // Runs in progress across every project, to tell a full machine from a stuck project.
   runningElsewhere: number;
 }
@@ -94,7 +95,7 @@ export function projectHealth({ now, tasks, runningElsewhere }: HealthInput): He
     });
   }
 
-  for (const { task, runs, autoContinueStopped } of tasks) {
+  for (const { task, runs, autoContinueStopped, coordinatorPaused } of tasks) {
     if (!task.roleId) continue;
     const last = runs.at(-1);
     const streak = failureStreak(runs);
@@ -113,9 +114,10 @@ export function projectHealth({ now, tasks, runningElsewhere }: HealthInput): He
         failures: streak,
       });
     }
-    // An idle task in progress has no run, question or review coming: nothing will move it.
+    // An idle task in progress has no run, question or review coming: nothing will move it. A
+    // coordinator pause will: its resume waits on usage, which the provider alert already explains.
     const quiet = now - time(task.updatedAt);
-    if (task.stage === "in_progress" && task.status === "idle" && !task.question && quiet >= STUCK_MS) {
+    if (task.stage === "in_progress" && task.status === "idle" && !task.question && !coordinatorPaused && quiet >= STUCK_MS) {
       concerns.push({
         key: `stuck:${task.id}:${task.updatedAt}`,
         kind: "stuck",

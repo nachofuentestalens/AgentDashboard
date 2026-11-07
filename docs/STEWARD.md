@@ -14,7 +14,7 @@ The steward does not only answer what waits on the owner. Each pass also runs th
 
 - **stall**: runs are queued, none is running, and no run has started or ended for 15 minutes. The key changes each time the stall doubles (15, 30, 60 minutes...), so a `wait` is looked at again if it lasts.
 - **failing**: a role task's latest run failed or was interrupted (stopped runs were the owner's doing). Retry is offered until it has failed 3 times in a row.
-- **stuck**: a role task has been idle in progress, with no question, for 30 minutes: nothing will move it.
+- **stuck**: a role task has been idle in progress, with no question, for 30 minutes: nothing will move it. A task whose run the coordinator paused for usage is not stuck: the coordinator resumes it when there is room.
 
 Every triage prompt also starts with a health overview (running and queued counts, last activity, queue wait reasons, tasks by stage, recent failures grouped by error) and asks the steward to look for one cause behind several items and handle that cause once. Concerns are routed like inbox items. Escalated ones appear in the owner's inbox under "Project health" (and as desktop alerts) until the condition clears by itself or the owner dismisses them (`POST /api/projects/:id/steward/alerts/dismiss`).
 

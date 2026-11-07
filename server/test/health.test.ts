@@ -115,4 +115,15 @@ describe("project health", () => {
     expect(stuck(true)).toContain("Automatic continues used: 1. Stopped: the last one changed nothing");
     expect(stuck(false)).not.toContain("Stopped");
   });
+
+  it("does not call a task stuck while the coordinator holds its paused run for usage", () => {
+    const paused = (coordinatorPaused: boolean) =>
+      projectHealth({
+        now: NOW,
+        tasks: [{ task: task("a", { updatedAt: ago(STUCK_MS + min) }), runs: [run("r1", "a", { status: "stopped" })], coordinatorPaused }],
+        runningElsewhere: 0,
+      }).concerns.map((c) => c.kind);
+    expect(paused(true)).toEqual([]);
+    expect(paused(false)).toEqual(["stuck"]);
+  });
 });
