@@ -32,6 +32,7 @@ describe("buildArgs", () => {
     expect(args).toContain("--permission-mode default");
     expect(args).toContain("--disallowedTools Edit Write NotebookEdit Bash PowerShell");
     expect(args).not.toContain("Bash(git:*)");
+    expect(args).toContain("WebSearch WebFetch");
   });
 
   it("grants full access only when the run is editable", () => {

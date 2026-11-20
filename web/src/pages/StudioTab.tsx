@@ -451,7 +451,10 @@ function RoleEditor({
         <Field label="Always-read documents" hint="Design documents included in full in every task, one path per line, e.g. design/studio/tech-stack.md.">
           <textarea className={`${inputClass} min-h-16 font-mono text-xs`} value={docs} onChange={(e) => setDocs(e.target.value)} />
         </Field>
-        <Field label="Allowed commands" hint="One rule per line. Empty: the project's allowed commands.">
+        <Field
+          label="Allowed commands"
+          hint="Legacy rules. Editable work runs have full tool and network access without prompts; these rules do not restrict them."
+        >
           <textarea
             className={`${inputClass} min-h-16 font-mono text-xs`}
             value={tools}

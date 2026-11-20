@@ -83,7 +83,7 @@ describe("studio structure", () => {
 });
 
 describe("role tasks", () => {
-  it("run with the role's model, effort, preamble file and folder rules, and finish as done", async () => {
+  it("run with the role's model, effort, preamble file and full tool access, and finish as done", async () => {
     const app = await start();
     const { projectId, role } = await studioProject(app);
     const task = await roleTask(app, projectId, role("QA Tester"), "Check the build [args] [sysprompt] [context]");
@@ -103,14 +103,15 @@ describe("role tasks", () => {
       .readEvents(run.id)
       .flatMap((e) => (e.event.kind === "text" ? [e.event.text] : []))
       .join("\n");
-    expect(events).toContain("(can edit qa) as QA Tester (QA) with studio context");
+    expect(events).toContain("(full access) as QA Tester (QA) with studio context");
     expect(events).toContain("System prompt: You are QA Tester, the QA Tester in the QA department");
     expect(events).toContain("Team (use these exact role names in task blocks):");
     expect(events).toContain("This task:");
     const args = JSON.parse(events.match(/Arguments: (\[.*\])/)![1]!) as string[];
     expect(args).toContain("--append-system-prompt-file");
-    expect(args.join(" ")).toContain("--permission-mode default --allowedTools Edit(./qa/**)");
-    expect(args.join(" ")).toContain("--disallowedTools Edit(./design/decisions.md)");
+    expect(args.join(" ")).toContain("--permission-mode bypassPermissions");
+    expect(args).not.toContain("--disallowedTools");
+    expect(events).toContain("full filesystem, command and network access");
     // Nothing anyone wrote reaches the process arguments.
     for (const words of ["Check the build", "check the build", "test plans", "QA Tester"]) expect(args.join(" ")).not.toContain(words);
     expect(text).toBeTruthy();
@@ -118,14 +119,14 @@ describe("role tasks", () => {
     expect(fs.readdirSync(path.join((app as App & { dataDir: string }).dataDir, "prompts"))).toEqual([]);
   });
 
-  it("lets a '.' department edit everywhere except other departments' folders", async () => {
+  it("gives a '.' department unattended tool access too", async () => {
     const app = await start();
     const { projectId, role } = await studioProject(app);
     const task = await roleTask(app, projectId, role("Gameplay Programmer"), "Fix it [args]");
     await stepFinished(app, task.id);
     const args = reply(app, task.id);
-    expect(args).toContain('"--permission-mode","acceptEdits"');
-    expect(args).toContain('"--disallowedTools","Edit(./design/studio/**)","Edit(./design/game/**)","Edit(./qa/**)","Edit(./design/decisions.md)"');
+    expect(args).toContain('"--permission-mode","bypassPermissions"');
+    expect(args).not.toContain("--disallowedTools");
   });
 
   it("runs one writing agent per department at a time", async () => {

@@ -30,7 +30,8 @@ export function roleSystemPrompt(input: {
     : [];
   const area = role.canEdit
     ? [
-        `You may edit files ${describeArea(department, input.departments)}. Other departments own the rest; edits there are refused, so ask them with a task block instead.`,
+        `You may edit files ${describeArea(department, input.departments)}. Other departments own the rest; ask them with a task block for source changes outside your area.`,
+        "Editable work runs have full filesystem, command and network access, including web research, dependency installation, builds and tests. Use these tools without permission prompts for the owner's authorized task; respect repository/worktree instructions and department ownership.",
         `Only one agent of ${department.name} edits files at a time. Leave the project building and running when you finish.`,
       ]
     : ["This role is read-only: investigate, review and report, but do not try to change files. Ask a role that can edit with a task block."];

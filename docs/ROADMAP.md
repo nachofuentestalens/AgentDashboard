@@ -33,7 +33,7 @@ Spec: [docs/prompts/studio.md](prompts/studio.md).
 - [x] Roles: job description, model, effort, can-edit, allowed commands, always-read documents. Agents staff roles; hire, pause and remove them (removed agents with history are archived)
 - [x] "Small indie studio" template: Leadership (CTO, Game Director), Engineering (Gameplay Programmer, Tools Engineer), Design (Systems, Narrative, Economy), QA
 - [x] Role tasks: a priority from 0 to 10 and an emergency flag; queued, then picked up by a free agent of the role, highest priority first
-- [x] Folder ownership enforced by Claude Code permission rules; one writing agent per department at a time; read-only runs alongside
+- [x] Department ownership in agent instructions; unattended full tool/network access for editable work, web research for all roles, and read-only reviews/handoffs; one writing agent per department at a time
 - [x] Role preamble via `--append-system-prompt-file`, studio context (team, design document index, always-read documents) in front of the message on stdin
 - [x] Scheduler: per-provider concurrency limits (Claude and Codex, one each by default) and daily budget, per-department budgets, fair share by spend per weight, emergencies first and freezing their project, "run anyway", queued runs survive restarts
 - [x] Agents end replies with fenced `task`, `proposal` and `question` blocks; malformed blocks become warnings, never failures

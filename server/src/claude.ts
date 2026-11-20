@@ -128,7 +128,7 @@ export interface RunArgs {
   sessionId: string;
   resume: boolean;
   canEdit: boolean;
-  // Owner chats can use the machine's tools without an interactive approval prompt.
+  // Editable work runs can use the machine's tools without an interactive approval prompt.
   fullAccess?: boolean;
   allowedTools: string[];
   systemPrompt: string;
@@ -168,7 +168,7 @@ export function systemPrompt(projectName: string, canEdit: boolean, fullAccess =
     "The developer reads your replies in the dashboard, rendered as Markdown. Nobody can approve permission prompts while you run:",
     canEdit
       ? fullAccess
-        ? "this editable owner chat has full filesystem, command and network access. Carry out the owner's authorized work without permission prompts; respect their task scope and repository/worktree instructions."
+        ? "this editable work run has full filesystem, command and network access. Carry out the owner's authorized work without permission prompts; respect their task scope and repository/worktree instructions."
         : "file edits are allowed, and only the pre-approved commands will run. If you need a command that is refused, say which one and why."
       : "this conversation is read-only. Investigate and explain, but do not try to change files.",
   ].join(" ");

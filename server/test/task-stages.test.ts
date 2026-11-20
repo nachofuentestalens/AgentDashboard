@@ -153,6 +153,9 @@ describe("task stages", () => {
     expect(args).toContain("--session-id");
     expect(args).toContain("--disallowedTools");
     expect(args).not.toContain("acceptEdits");
+    expect(args).not.toContain("bypassPermissions");
+    expect(args).toContain("WebSearch");
+    expect(args).toContain("WebFetch");
     expect(app.store.listTaskReviews(task.id)).toMatchObject([
       { reviewer: qa.id, verdict: "changes", findings: ["src/dash.ts:42 cooldown never resets after death"] },
     ]);

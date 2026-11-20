@@ -44,6 +44,8 @@ export function buildCodexArgs(a: CodexArgs): string[] {
   args.push("--json");
   if (a.model) args.push("-m", a.model);
   args.push("-c", `model_reasoning_effort="${a.effort}"`, "-c", `sandbox_mode="${a.sandbox}"`, "-c", 'approval_policy="never"');
+  // Research is available even to read-only roles and on resumed sessions.
+  args.push("-c", 'web_search="live"');
   const roots = a.writableRoots.map(tomlPath).filter((r): r is string => r !== null);
   if (a.sandbox === "workspace-write" && roots.length) args.push("-c", `sandbox_workspace_write.writable_roots=[${roots.join(", ")}]`);
   args.push("-");
