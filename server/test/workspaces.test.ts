@@ -1,9 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { App } from "../src/app.ts";
-import { npmCacheDir } from "../src/codex.ts";
 import { Workspaces } from "../src/workspaces.ts";
 import { api, git, gitRepo, newProject, newTask, runFinished, stepFinished, tempDir, testApp, waitFor } from "./helpers.ts";
 
@@ -64,15 +62,15 @@ describe("isolated task workspaces", () => {
     const role = instance.store.findRoleByName(projectId, "QA Tester")!;
     const task = await newTask(instance, projectId, { roleId: role.id, provider: "codex", message: "Verify the build [args]" });
     await stepFinished(instance, task.id);
-    const worktree = instance.store.getWorkspace(task.id)!.path;
+    expect(instance.store.getWorkspace(task.id)).not.toBeNull();
     const reply = instance.runner
       .readEvents(instance.store.listRuns(task.id).at(-1)!.id)
       .flatMap((e) => (e.event.kind === "text" ? [e.event.text] : []))
       .join("\n");
-    const roots = JSON.parse(reply.match(/Arguments: (.*)/)![1]!).find((a: string) => a.startsWith("sandbox_workspace_write.writable_roots="));
-    expect(roots).toContain(`'${worktree}'`);
-    expect(roots).toContain(`'${os.tmpdir()}'`);
-    expect(roots).toContain(`'${npmCacheDir()}'`);
+    const args = JSON.parse(reply.match(/Arguments: (.*)/)![1]!) as string[];
+    expect(args).toContain('sandbox_mode="danger-full-access"');
+    expect(args).toContain('approval_policy="never"');
+    expect(args).toContain('web_search="live"');
   });
 
   it("saves modifications, deletions and new files without changing the primary tree or index; resumes after restart", async () => {

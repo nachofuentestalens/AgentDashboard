@@ -1733,7 +1733,8 @@ export class Runner {
           promptFile = ctx.file;
           input = `${ctx.preface}\n${prompt}`;
         }
-        const fullAccess = canEdit && !task.roleId && run.purpose === "work";
+        // Studio workers need the same unattended tools as owner chats, including research and installs.
+        const fullAccess = canEdit && run.purpose === "work";
         if (provider === "claude") {
           args = buildArgs({
             model: model!,

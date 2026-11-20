@@ -19,7 +19,7 @@ A local dashboard (Node + React) that runs Claude Code CLI agents on the develop
   - `notify.ts`: opt-in Telegram alerts when agents stop making progress (quota, health concerns, escalations, questions). See `docs/NOTIFICATIONS.md`.
   - `studio.ts`: the studio service: template, structure views, acting on reply blocks, inbox decisions, compute view, feedback triage. `template.ts`: the default studio.
   - `company.ts`: opt-in company briefs, initial Director/QA staffing, and durable daily observation assignments. See `docs/COMPANY.md` for scheduling, recovery, and unfinished autonomy phases.
-  - `folders.ts`: department folders → Claude Code permission rules. `prompts.ts`: the role preamble and the per-turn studio context. `docs.ts`: design documents under `design/` and their commits.
+  - `folders.ts`: department ownership descriptions and legacy Claude Code permission rules. Editable work runs have unattended full tool access; department ownership stays in their prompts. Reviews/handoffs remain read-only; see `docs/WORKSPACES.md`. `prompts.ts`: the role preamble and the per-turn studio context. `docs.ts`: design documents under `design/` and their commits.
   - `claude.ts`: finds the CLI (PATH, `claude.exe`, npm `.cmd` shims) and builds its arguments.
   - `git.ts`: repository checks and commits. `fake/fake-claude.mjs`: the stand-in agent for tests and demo mode.
   - `workspaces.ts`: persistent per-task Git worktrees and server-owned checkpoints. `github.ts`: branch publication, draft PRs and checked automatic squash merges for completed work; see `docs/WORKSPACES.md` for authentication, baseline requirements, recovery and deployment.

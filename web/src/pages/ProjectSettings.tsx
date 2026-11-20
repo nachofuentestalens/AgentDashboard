@@ -102,8 +102,8 @@ export function ProjectSettings({ project }: { project: Project }) {
         label="Allowed commands"
         hint={
           <>
-            One rule per line, e.g. <code className="font-mono">Bash(git:*)</code>. Agents that can edit files may run only these without asking; anything else
-            is refused.{" "}
+            Legacy rules, one per line, e.g. <code className="font-mono">Bash(git:*)</code>. Editable work runs have full tool and network access without
+            prompts; these rules do not restrict them. Read-only runs retain their restrictions and can research the web.{" "}
             <button type="button" className="text-accent underline" onClick={() => setTools(DEFAULT_ALLOWED_TOOLS.join("\n"))}>
               Reset to defaults
             </button>
